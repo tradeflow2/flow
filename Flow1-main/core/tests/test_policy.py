@@ -228,3 +228,19 @@ class ErrorTable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfigEnvironment(unittest.TestCase):
+    SECRET = "x" * 32
+    def test_config_requires_env(self):
+        from tradeflow_core import config
+        for env in ({"TRADEFLOW_JWT_SECRET": self.SECRET}, {"TRADEFLOW_JWT_SECRET": self.SECRET, "TRADEFLOW_ENV": ""}, {"TRADEFLOW_JWT_SECRET": self.SECRET, "TRADEFLOW_ENV": "   "}):
+            with self.assertRaises(config.ConfigError) as cm:
+                config.load(env)
+            self.assertIn("TRADEFLOW_ENV is required", str(cm.exception), env)
+        with self.assertRaises(config.ConfigError):
+            config.load({"TRADEFLOW_JWT_SECRET": self.SECRET, "TRADEFLOW_ENV": "prod"})
+        with self.assertRaises(config.ConfigError):
+            config.load({"TRADEFLOW_JWT_SECRET": "dev" + "x" * 40, "TRADEFLOW_ENV": "production"})
+        s, _ = config.load({"TRADEFLOW_JWT_SECRET": "dev" + "x" * 40, "TRADEFLOW_ENV": "development"})
+        self.assertEqual(s.environment, "development")

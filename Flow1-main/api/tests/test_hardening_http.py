@@ -170,3 +170,18 @@ class Hardening(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AsgiEntryPoint(unittest.TestCase):
+    def test_app_imports(self):
+        import importlib, os, sys
+        from unittest import mock
+        from fastapi import FastAPI
+        env = {"TRADEFLOW_ENV": "test", "TRADEFLOW_JWT_SECRET": "x" * 32, "TRADEFLOW_DATABASE_URL": "host=127.0.0.1 port=1 dbname=x connect_timeout=2"}
+        sys.modules.pop("run", None)
+        with mock.patch.dict(os.environ, env):
+            module = importlib.import_module("run")
+        try:
+            self.assertIsInstance(module.app, FastAPI)
+        finally:
+            sys.modules.pop("run", None)

@@ -37,12 +37,15 @@ def load(env: dict) -> tuple[Settings, list[str]]:
     days = num("TRADEFLOW_REFRESH_TTL_DAYS", 30, 1, 90)
     grace = num("TRADEFLOW_REFRESH_GRACE_SECONDS", 10, 0, 60)
     workers = num("WORKERS", 1, 1, 64)
-    environment = env.get("TRADEFLOW_ENV", "development")
-    if environment not in ("development", "test", "production"):
+    environment = env.get("TRADEFLOW_ENV")
+    if environment is None or not str(environment).strip():
+        errs.append("TRADEFLOW_ENV is required (development|test|production)")
+        environment = ""
+    elif environment not in ("development", "test", "production"):
         errs.append("TRADEFLOW_ENV must be development|test|production")
     if workers != 1:
         warns.append("WORKERS != 1: the in-process login rate limiter is per worker (contract D10)")
-    if environment == "production" and secret.startswith("dev"):
+    if environment == "production" and secret.lower().startswith("dev"):
         errs.append("a development-looking secret is not allowed in production")
     if errs:
         raise ConfigError("; ".join(errs))

@@ -172,9 +172,9 @@ class Products(unittest.TestCase):
 class Config(unittest.TestCase):
     def test_config(self):
         from tradeflow_core import config
-        s, w = config.load({"TRADEFLOW_JWT_SECRET": "x" * 32})
+        s, w = config.load({"TRADEFLOW_JWT_SECRET": "x" * 32, "TRADEFLOW_ENV": "test"})
         self.assertEqual((s.access_ttl_seconds, s.refresh_grace_seconds, s.workers, w), (3600, 10, 1, []))
-        self.assertTrue(config.load({"TRADEFLOW_JWT_SECRET": "x" * 32, "WORKERS": "4"})[1])
+        self.assertTrue(config.load({"TRADEFLOW_JWT_SECRET": "x" * 32, "TRADEFLOW_ENV": "test", "WORKERS": "4"})[1])
         for env in ({}, {"TRADEFLOW_JWT_SECRET": "short"}, {"TRADEFLOW_JWT_SECRET": "x" * 32, "TRADEFLOW_ENV": "prod"},
                     {"TRADEFLOW_JWT_SECRET": "x" * 32, "TRADEFLOW_REFRESH_GRACE_SECONDS": "-1"},
                     {"TRADEFLOW_JWT_SECRET": "dev" + "x" * 40, "TRADEFLOW_ENV": "production"}):
