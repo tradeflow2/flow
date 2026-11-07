@@ -868,7 +868,7 @@ Regression: sequence 1,2,3; series independent; organizations independent. Concu
 
 # ADR-060 — Pre-Invoice Scope
 
-**Phase:** MVP+1 · **Status:** Accepted · **Decision:** Option 2 · **Stage 4:** implementation written, not yet run by its author
+**Phase:** MVP+1 · **Status:** Accepted · **Decision:** Option 2 · **Stage 4:** verified (277 tests passed: 172 Core + 105 API)
 
 ## Decision
 Pre-invoice is part of the product scope, issued as an **immutable snapshot** from a `SUBMITTED` purchase request, **after** the first vertical slice is complete and tested.

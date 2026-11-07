@@ -1,6 +1,6 @@
 # api/ — Slice 01 HTTP + PostgreSQL layer (FastAPI, psycopg 3)
 
-All 29 endpoints of the Slice 01 contract are written:
+All 36 endpoints of the Slice 01 contract are written:
 auth (4), organizations (2), customers (4), products (5), lookups (2), purchase requests (6), items (3), pricing (2), audit-logs (1).
 Stage 4 adds 7 pre-invoice endpoints (app/pre_invoices_service.py, app/routes/pre_invoices.py; contract section 26).
 

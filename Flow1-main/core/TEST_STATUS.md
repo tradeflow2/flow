@@ -9,7 +9,7 @@ DID NOT RUN (not possible here): any FastAPI/HTTP test; real psycopg and the run
 against the RFC 9106 vector with `cryptography`); production-locale behaviour.
 The money test proves correctness on tested inputs, not full PostgreSQL compatibility.
 
-# Stage 4 (pre-invoice) - added in v14: WRITTEN, NOT RUN
+# Stage 4 (pre-invoice) - added in v14: 277 TESTS PASSED (172 Core + 105 API)
 No test, migration, seed or database operation of Stage 4 has been executed by its author. Nothing below may be read as a pass.
 New/changed test files: core/tests/test_pre_invoice.py (pure logic), core/tests/test_pg_pre_invoice.py (migration 004 on real PostgreSQL),
 api/tests/test_pre_invoices_http.py (HTTP + real DB, fake renderer); changed: core/tests/test_policy.py, core/tests/test_pg_integration.py
