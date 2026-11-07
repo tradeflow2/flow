@@ -1,0 +1,28 @@
+# ==========================================
+# Flow1 API - Runtime dependencies
+# Versions from the reported successful environment
+# ==========================================
+
+# API framework
+fastapi==0.162.0
+starlette==1.10.0
+pydantic==2.14.2
+
+# Database
+psycopg[binary]==3.3.7
+
+# Authentication / JWT
+PyJWT==2.15.1
+
+# ==========================================
+# Deployment dependencies
+# ==========================================
+
+uvicorn==0.54.0
+
+# ==========================================
+# Test dependencies
+# ==========================================
+
+httpx==0.28.1
+pytest==9.2.0
