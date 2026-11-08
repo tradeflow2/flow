@@ -318,3 +318,24 @@ class Migration004(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_cancel_reason_is_rejected_on_draft_insert(self):
+        setup = self.request(R1, "T-000001")
+        bad_draft = self.draft(P1, R1, with_items=False).replace(
+            "grand_total, created_by) SELECT",
+            "grand_total, created_by, cancel_reason) SELECT"
+        ).replace(
+            "r.grand_total, r.created_by FROM",
+            "r.grand_total, r.created_by, 'unexpected' FROM"
+        )
+        self.state_conflict(setup, bad_draft.rstrip(";"))
+
+    def test_cancel_reason_is_rejected_when_issuing_a_draft(self):
+        setup = (self.request(R1, "T-000001") + self.draft(P1, R1))
+        failing = (f"UPDATE pre_invoices SET status='ISSUED', cancel_reason='unexpected' WHERE id='{P1}'")
+        self.state_conflict(setup, failing)
+
+    def test_cancelled_by_is_rejected_when_superseding_an_issued_invoice(self):
+        setup = (self.issued() + self.request(R2, "T-000002") + self.draft(P2, R2, chain=P1, supersedes=P1))
+        failing = (f"UPDATE pre_invoices SET status='SUPERSEDED', superseded_at=NOW(), cancelled_by='{self.admin}' WHERE id='{P1}'")
+        self.state_conflict(setup, failing)
