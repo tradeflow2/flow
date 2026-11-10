@@ -46,10 +46,10 @@ def check(name, condition):
 # Migration discovery and ordering
 # ---------------------------------------------------------
 
-expected_migrations = ["001", "002", "003", "004", "005"]
+expected_migrations = ["001", "002", "003", "004", "005", "006"]
 
 check(
-    "migrations are 001,002,003,004,005 in order",
+    "migrations are 001,002,003,004,005,006 in order",
     [migration.version for migration in ms] == expected_migrations,
 )
 
@@ -72,65 +72,84 @@ check(
 # ---------------------------------------------------------
 
 check(
-    "fresh DB: all five pending in order",
+    "fresh DB: all six pending in order",
     [
         migration.version
         for migration in runner.find_pending(ms, {})
     ] == expected_migrations,
 )
 
-ap = {
-    migration.version: (migration.name, migration.checksum)
-    for migration in ms[:2]
-}
+by_version = {migration.version: migration for migration in ms}
+
+
+def applied_through(version):
+    versions = expected_migrations[:expected_migrations.index(version) + 1]
+    return {
+        item: (by_version[item].name, by_version[item].checksum)
+        for item in versions
+    }
+
+
+ap = applied_through("002")
+ap3 = applied_through("003")
+ap4 = applied_through("004")
+ap5 = applied_through("005")
+ap6 = applied_through("006")
 
 check(
-    "001+002 applied: 003,004,005 pending",
+    "001+002 applied: 003,004,005,006 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap)
-    ] == ["003", "004", "005"],
+    ] == ["003", "004", "005", "006"],
 )
 
-ap3 = {
-    migration.version: (migration.name, migration.checksum)
-    for migration in ms[:3]
-}
-
 check(
-    "001-003 applied: 004 and 005 pending",
+    "001-003 applied: 004,005,006 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap3)
-    ] == ["004", "005"],
+    ] == ["004", "005", "006"],
 )
 
-ap4 = {
-    migration.version: (migration.name, migration.checksum)
-    for migration in ms[:4]
-}
-
 check(
-    "001-004 applied: only 005 pending",
+    "001-004 applied: 005,006 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap4)
-    ] == ["005"],
+    ] == ["005", "006"],
+)
+
+check(
+    "001-005 applied: only 006 pending",
+    [
+        migration.version
+        for migration in runner.find_pending(ms, ap5)
+    ] == ["006"],
+)
+
+check(
+    "001-006 applied: nothing pending",
+    runner.find_pending(ms, ap6) == [],
 )
 
 # ---------------------------------------------------------
 # Migration names
 # ---------------------------------------------------------
 
-check(
-    "004 is named pre_invoices",
-    ms[3].name == "pre_invoices",
-)
+expected_names = {
+    "003": "org_code_and_username",
+    "004": "pre_invoices",
+    "005": "cancel_constraints",
+    "006": "request_cancel_guard",
+}
 
-check(
-    "005 is named cancel_constraints",
-    ms[4].name == "cancel_constraints",
-)
+for version, expected_name in expected_names.items():
+    migration = by_version.get(version)
+    check(
+        f"{version} is named {expected_name}",
+        migration is not None and migration.name == expected_name,
+    )
 
 # ---------------------------------------------------------
 # Out-of-order migration protection
@@ -141,7 +160,10 @@ try:
         ms,
         {
             "001": ap["001"],
-            "003": (ms[2].name, ms[2].checksum),
+            "003": (
+                by_version["003"].name,
+                by_version["003"].checksum,
+            ),
         },
     )
     check(
@@ -149,76 +171,40 @@ try:
         False,
     )
 
-except Exception as exc:
+except RuntimeError as exc:
     check(
-        "003 applied without 002 -> 002 refused (no out-of-order): "
-        + str(exc)[:60],
-        True,
+        "003 applied without 002 is refused with out-of-order error",
+        "Out-of-order migration(s)" in str(exc),
     )
 
 # ---------------------------------------------------------
 # Checksum validation
 # ---------------------------------------------------------
 
-try:
-    runner.validate_applied_migrations(
-        ms,
-        {
-            **ap,
-            "003": (ms[2].name, "0" * 64),
-        },
-    )
-    check(
-        "edited 003 detected by checksum",
-        False,
-    )
+for version, applied in (
+    ("003", ap3),
+    ("004", ap4),
+    ("005", ap5),
+    ("006", ap6),
+):
+    migration = by_version[version]
+    corrupted = {
+        **applied,
+        version: (migration.name, "0" * 64),
+    }
 
-except RuntimeError as exc:
-    check(
-        "edited 003 detected by checksum",
-        "Checksum mismatch" in str(exc),
-    )
+    try:
+        runner.validate_applied_migrations(ms, corrupted)
+        check(
+            f"edited {version} detected by checksum",
+            False,
+        )
 
-
-try:
-    runner.validate_applied_migrations(
-        ms,
-        {
-            **ap3,
-            "004": (ms[3].name, "0" * 64),
-        },
-    )
-    check(
-        "edited 004 detected by checksum",
-        False,
-    )
-
-except RuntimeError as exc:
-    check(
-        "edited 004 detected by checksum",
-        "Checksum mismatch" in str(exc),
-    )
-
-
-try:
-    runner.validate_applied_migrations(
-        ms,
-        {
-            **ap4,
-            "005": (ms[4].name, "0" * 64),
-        },
-    )
-    check(
-        "edited 005 detected by checksum",
-        False,
-    )
-
-except RuntimeError as exc:
-    check(
-        "edited 005 detected by checksum",
-        "Checksum mismatch" in str(exc),
-    )
-
+    except RuntimeError as exc:
+        check(
+            f"edited {version} detected by checksum",
+            "Checksum mismatch" in str(exc),
+        )
 
 # ---------------------------------------------------------
 # Final result
