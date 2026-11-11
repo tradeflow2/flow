@@ -418,3 +418,38 @@ Commit یا فایل‌های درگیر:
 
 **Commit فعلی:** `44ec5cc`
 **محل ذخیره بکاپ:** `C:\Users\yousef\Desktop\Flow1_Final_Backup.zip`
+
+---
+
+### ۳۶. H7 — وضعیت نهایی (2026-11-12)
+
+**وضعیت:** ✅ **VERIFIED — همه تست‌ها پاس شدن**
+
+**تست‌ها (روی Windows 10 + Python 3.14):**
+- `test_runner_order.py`: 18/18 PASSED ✅
+- `core/tests`: 177 PASSED ✅
+- `api/tests`: 106 PASSED ✅
+- **جمع: 301 تست موفق** ✅
+
+**Commit‌ها:**
+- `a6f1e45` (H7 Core) ✅ روی GitHub
+- `a7bfbdc` (Fix API — timeout + UTF-8) ✅ روی GitHub
+
+**فایل‌های تغییرکرده:**
+- `db/sql/006_request_cancel_guard.sql` (جدید — فقط Trigger اول)
+- `db/tests/test_runner_order.py` (انتظار 001-006)
+- `core/tests/test_pg_pre_invoice.py` (سه تست H2 داخل کلاس + تست H7)
+- `core/tests/pg.py` (اضافه شدن 005 و 006)
+- `api/tests/pg.py` (timeout + UTF-8)
+
+**فایل‌های محافظت‌شده (تغییر نکردن):**
+- `db/sql/004_pre_invoices.sql` ✅
+- `db/sql/005_cancel_constraints.sql` ✅
+- `db/sql/runner.py` ✅
+
+**پشتیبان‌ها:**
+- `C:\Users\10\Desktop\Flow1_Full_Backup_2026-11-12.zip` ✅
+- `C:\Users\10\Desktop\tf_api_test_backup_2026-11-12.dump` ✅
+- `C:\Users\10\Desktop\Flow1_2026-11-11.bundle` ✅
+
+**قدم بعدی:** H4 (Rate Limiter)
