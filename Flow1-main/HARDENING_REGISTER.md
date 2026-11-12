@@ -12,7 +12,8 @@
 | H1 | لغو ISSUED با Replacement DRAFT | گزینه الف (رد لغو تا DRAFT باز دارد) | اجرا نشده | خیر |
 | H2 | ستون‌های لغو در Migration 004 | Migration 005 (CHECK + Trigger؟) | اجرا نشده | بله (Trigger) |
 | H3 | PII در Audit | حداقل‌سازی + ماسک + allowlist | اجرا نشده | خیر |
-| H4 | Rate Limiter چند-فرایندی | نیازمند تصمیم | اجرا نشده | بله |
+|
+| H4 | Rate Limiter چند-فرایندی | **DONE — Single Worker (Owner Decision)** | ✅ انجام شد | خیر |
 | H5 | وابستگی‌ها | پین + حذف argon2-cffi + افزودن starlette | اجرا نشده | خیر |
 | H6 | ASGI Entry Point | api/run.py + یک Worker + TRADEFLOW_ENV الزامی | اجرا نشده | بله (ساختار) |
 | H7 | محافظ لغو درخواست فقط در Service | نیازمند تصمیم (Trigger یا نه؟) | اجرا نشده | بله |
