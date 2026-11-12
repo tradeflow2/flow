@@ -453,3 +453,44 @@ Commit یا فایل‌های درگیر:
 - `C:\Users\10\Desktop\Flow1_2026-11-11.bundle` ✅
 
 **قدم بعدی:** H4 (Rate Limiter)
+
+---
+
+### ۳۷. وضعیت نهایی Hardening (2026-11-12)
+
+**آخرین Commit:** `6790200`
+
+**وضعیت Hardening:**
+
+| Hardening | موضوع | وضعیت | Commit |
+|-----------|-------|-------|--------|
+| H1 | لغو ISSUED | ✅ DONE | `9382d07` |
+| H2 | ستون‌های لغو | ✅ DONE | `5ea0e93` |
+| H3 | PII در Audit | ✅ DONE | `ec70055` |
+| H4 | Rate Limiter | ✅ DONE (Single Worker — Owner Decision) | `6790200` |
+| H5 | وابستگی‌ها | ✅ DONE | `46c7a9a` |
+| H6 | ASGI Entry Point | ✅ DONE | `a9b6576` |
+| H7 | محافظ لغو درخواست | ✅ VERIFIED (301 tests) | `a6f1e45` + `a7bfbdc` |
+| H8 | مستندات | ✅ DONE | `44ec5cc` |
+| H9 | ZIP رسمی | ✅ DONE | — |
+| H10 | PDF و فونت فارسی | ⏳ DEFERRED (پروژه مستقل) | — |
+
+**Stage 5 (Discount & Approval):** NOT STARTED
+
+**تست‌ها (تأیید‌شده — اجرای مجدد لازم نیست):**
+- `test_runner_order.py`: 18/18 PASSED ✅
+- `core/tests`: 177 PASSED ✅
+- `api/tests`: 106 PASSED ✅
+- **جمع: 301 تست موفق** ✅
+
+**فایل‌های محافظت‌شده (تغییر نکردن):**
+- `db/sql/004_pre_invoices.sql` ✅
+- `db/sql/005_cancel_constraints.sql` ✅
+- `db/sql/runner.py` ✅
+
+**پشتیبان‌ها:**
+- GitHub: `github.com/tradeflow2/flow` (Commit `6790200`)
+- فلش: `G:\flow\Flow1_Backups\`
+- دسکتاپ: `C:\Users\10\Desktop\`
+
+**قدم بعدی:** Stage 5 (Discount & Approval)
