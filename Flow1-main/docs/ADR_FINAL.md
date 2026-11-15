@@ -163,7 +163,7 @@ This decision keeps the architecture explicit, testable and consistent with the 
 
 # ADR-013 - Approval and Authorization
 
-**Phase:** PHASE 2
+**Phase:** MVP – Stage 5 (Limited Scope)
 
 ## Decision
 Sensitive actions require explicit backend-enforced authorization. Maker-checker is used where the risk profile requires separation.
@@ -963,4 +963,5 @@ Read access for all three roles; default filter `is_active=true`. No write endpo
 
 ## Documents to update
 `MVP_SCOPE.md` (§ 3), `API_SPECIFICATION.md` (§ 25), `UI_UX_SPECIFICATION.md` (selectors), `SLICE_01_CONTRACT.md` (§ 1, § 7).
+
 

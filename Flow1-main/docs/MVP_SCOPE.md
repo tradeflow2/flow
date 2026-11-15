@@ -113,23 +113,48 @@ GET  /api/v1/pre-invoices/{id}/pdf
 ```
 
 Contract: `SLICE_01_CONTRACT.md` § 26. **Implemented:** the table/endpoint/audit/PDF-storage mechanics. **MVP policy (decision of this slice, not a permanent rule):** DRAFT not editable; replacement only through a new `SUBMITTED` request; role split SALES(own)/ACCOUNTING/ADMIN. **Configurable today: nothing.** **Future:** validity period, prepayment, manager approval, payment terms, printed fields, per-company correction policy, in-place revision. **Blocker:** no PDF library / Persian font approved — PDF generation fails with `PDF_RENDERER_UNAVAILABLE` until the owner decides.
-
 ## 5. Explicitly NOT MVP
 
-**Accepted for a later step, not in Slice 1:**
+The following capabilities are excluded from the MVP unless explicitly included through an approved stage contract or ADR.
 
-- Pre-Invoice — decision accepted as **MVP+1** (ADR-060); the backend (migration 004, 7 endpoints, PDF storage) is **written as Stage 4 and not yet executed by its author**. There is still **no screen** (UI_UX § 22) and no PDF renderer.
-
-**Not MVP:**
-
-- Payment
-- Voucher
-- Approval workflow
+- General-purpose multi-level approval workflows.
+- Approval workflows unrelated to the Stage 5 discount approval scope.
+- General manager approval for all sales and commercial documents.
+- Independent electronic signature infrastructure.
+- Time-based approval expiration and validity-period management.
+- Complete tax calculation and jurisdiction-specific tax engines.
+- Advanced document archiving and document lifecycle management.
 - Credit control
 - Inventory / Reservation / ATP
 - Shipment / Loading / Weighbridge / Release / Delivery / POD
 - Dispute / Claim / Return
 - Reconciliation
+
+## 5.1 Stage 5 MVP Inclusion
+
+The following limited approval capabilities are included in the MVP:
+
+- Configurable discount policies.
+- Direct discount authority and maximum requestable discount.
+- Discount policy evaluation based on `discount_applied_by`.
+- Item-level and request-level discounts.
+- Largest Remainder allocation of request-level discounts.
+- Versioned Commercial Snapshots.
+- Item-level tax amounts in Commercial Snapshots.
+- Discount approval tied to a specific snapshot version.
+- `ADMIN`-only discount approval.
+- Self-approval prevention.
+- Approval invalidation following commercially relevant changes.
+- Rejected requests remaining editable in `DRAFT`.
+- Submission without discount approval.
+- Pre-Invoice generation from the applicable Commercial Snapshot.
+- Snapshot and approval integrity validation at Pre-Invoice issuance.
+
+The Commercial Snapshot is the authoritative commercial source for Stage 5 Pre-Invoice generation and related financial documents.
+
+Existing `purchase_requests` total-field semantics remain unchanged.
+
+**Reference:** ADR-064 and `STAGE_05_CONTRACT.md`
 - Accounting connector implementation
 - File / Document management subsystem
 - Offline synchronization

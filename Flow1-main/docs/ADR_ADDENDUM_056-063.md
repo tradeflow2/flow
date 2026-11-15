@@ -164,7 +164,11 @@ Pre-invoice is part of the product scope, issued as an **immutable snapshot** fr
 >
 > **Decided for the MVP (MVP policy, not permanent product rules):** statuses `DRAFT → ISSUED | CANCELLED`, `ISSUED → SUPERSEDED | CANCELLED` (the last two final); a DRAFT has no number and is not editable (cancel and recreate); number only at issue; an issued document is never edited — a correction is a **new `SUBMITTED` request** whose pre-invoice `supersedes` the old one, and the old one becomes `SUPERSEDED` only when the replacement is successfully issued (same number, version + 1); a request with an `ISSUED` pre-invoice cannot be cancelled through the request cancel route (Service rule — `002` is frozen); PDF stored in `pre_invoice_documents` with its own status (`pending/ready/failed`), 10 MiB cap, ≥ 60 s between retries and ≤ 3 retries per 15 minutes (initial attempt not counted as a retry), a failure never rolls back issuing.
 >
-> **Not core rules, not built, not configurable today:** validity period (e.g. 24 h), prepayment, manager approval, payment terms, printed seller fields, company-specific workflow. There is no settings or workflow engine. [Future]
+> > **Not core rules, not built, not configurable today:** validity period (e.g. 24 h), prepayment, payment terms, printed seller fields, company-specific workflow. There is no settings or workflow engine. [Future]
+
+> **Stage 5 MVP Clarification (ADR-064):** Discount approval is included in the MVP within the limited scope defined by ADR-064. The MVP discount approval workflow: (a) is performed by the `ADMIN` role only; (b) is tied to a specific Commercial Snapshot version; (c) prohibits self-approval; (d) is invalidated when commercially relevant information changes; (e) does not require approval for zero discounts; (f) does not block submission of a purchase request; (g) must be validated before Pre-Invoice issuance when approval is required.
+
+> **Future Scope Retained:** General manager approval beyond Stage 5 discount approval, time-based validity periods and expiration policies, general-purpose approval workflows, and independent electronic signature workflows remain outside the Stage 5 MVP unless separately approved.
 >
 > **Open blocker:** no PDF library or Persian/RTL font is approved; production PDF generation needs that decision (the renderer is injected; the default fails with `PDF_RENDERER_UNAVAILABLE`).
 
