@@ -568,3 +568,98 @@ Commit یا فایل‌های درگیر:
 
 **وضعیت H7:** ✅ VERIFIED (301 tests)
 **وضعیت Stage 5:** 🟡 منتظر بازبینی قرارداد
+
+---
+
+### ۳۹. Stage 5 — تکمیل شد (2026-11-15)
+
+**Commit فعلی:** `7fd5d1b`
+
+**وضعیت Stage 5:** ✅ **DONE**
+
+**۸ جدول جدید (Migration 007):**
+1. `discount_policies`
+2. `purchase_request_discounts`
+3. `request_commercial_state`
+4. `commercial_snapshots`
+5. `commercial_snapshot_items`
+6. `discount_approvals`
+7. `discount_approval_history`
+8. `pre_invoice_commercial_links`
+
+**Core (۳ فایل):**
+- `core/tradeflow_core/discount.py`
+- `core/tradeflow_core/approval.py`
+- `core/tradeflow_core/snapshot.py`
+
+**API (۴ سرویس + ۴ Route):**
+- `api/app/discount_service.py`
+- `api/app/approval_service.py`
+- `api/app/snapshot_service.py`
+- `api/app/commercial_mutations.py`
+- `api/app/routes/discounts.py`
+- `api/app/routes/approvals.py`
+- `api/app/routes/discount_policies.py`
+- `api/app/routes/snapshots.py`
+
+**Gate:** `trg_pre_invoices_snapshot_gate` (Stage 4 compatible)
+
+**تست‌ها (۳۱۹ تست):**
+- `core/tests`: ۱۸۶ PASSED ✅
+- `api/tests`: ۱۱۲ PASSED ✅
+- `db/tests/test_runner_order.py`: ۲۱ PASSED ✅
+
+**ADR-064 Amendment:** Controlled `SUBMITTED → DRAFT` transition
+
+**تصمیمات Stage 5 (۱۶ مورد):**
+1. رفتار رد شدن: DRAFT + Snapshot جدید
+2. نبود سیاست: Fail Closed
+3. نقش ملاک سیاست: `discount_applied_by`
+4. ADMIN تنها: فقط ADMIN در MVP
+5. فیلدهای نسخه: مشتری، کالا، مقدار، واحد، قیمت، تخفیف، مالیات، اضافه/حذف اقلام
+6. روش تخصیص: Largest Remainder + Tie-break
+7. لغو Approval: ممنوع (فقط INVALIDATED)
+8. کد خطا: `42501` برای Self-Approval
+9. Hard-code ADMIN: متمرکز
+10. جایگاه Gate: فقط Issue
+11. مالیات: سطح قلم
+12. تأیید در DRAFT: مجاز (SUBMITTED بدون Approval)
+13. اطلاعات مشتری: ۴ فیلد + `commercial_data`
+14. نوع Policy: `NUMERIC(20,4)`
+15. اولویت Policy: PRODUCT > ORGANIZATION
+16. اطلاعات کالا: `product_name` + `product_code` + `unit_name` + `unit_code`
+
+**قدم بعدی:** Stage 6 (Payments & Credit) یا H10 (PDF)
+
+**پشتیبان‌ها:**
+- GitHub: `github.com/tradeflow2/flow` (`7fd5d1b`)
+- فلش: `G:\flow\Flow1_Backups\` — ۱۴ فایل
+- دسکتاپ: `C:\Users\10\Desktop\` — ۲ فایل جدید
+
+**تست‌های تأییدشده (اجرای مجدد لازم نیست):**
+- ۳۱۹ تست موفق ✅
+
+---
+
+### ۴۰. Stage 6 — شروع (2026-11-15)
+
+**وضعیت Stage 6:** ⏳ **شروع نشده**
+
+**روش‌های پرداخت MVP (تصمیم):**
+1. نقدی (Cash) ✅
+2. کارت‌به‌کارت / انتقال بانکی (Bank Transfer) ✅
+3. چک (Cheque) ✅
+4. کارت‌خوان (POS) ❌
+5. سایر روش‌ها ❌
+
+**زیرمراحل Stage 6:**
+- **S6-A:** Payments (ثبت پرداخت)
+- **S6-B:** Financial Confirmation (تأیید مالی)
+- **S6-C:** Credit (فروش اعتباری)
+
+**Migration بعدی:** `008`
+
+**نکات مهم:**
+- `customers.credit_limit` (از Migration 001) فقط فیلد اطلاعاتی است، نه سیستم اعتباری
+- نقش `ACCOUNTING` از قبل وجود دارد
+- Pre-Invoice مرجع مالی است، اما سند پرداخت نیست
