@@ -53,6 +53,9 @@ def make_db(
         "002_harden_mvp.sql",
         "003_org_code_and_username.sql",
         "004_pre_invoices.sql",
+        "005_cancel_constraints.sql",
+        "006_request_cancel_guard.sql",
+        "007_stage5.sql",
         "998_dev_seed_auth.sql",
     ),
 ):

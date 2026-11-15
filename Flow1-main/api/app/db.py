@@ -28,14 +28,16 @@ class Database:
 
 
     def run(self, fn):
-        """Run fn(conn) in one transaction. A deadlock or serialization failure is retried ONCE (contract 14.7);
-        a second failure propagates and is rendered as 503 TEMPORARILY_UNAVAILABLE."""
-        for attempt in (1, 2):
+        """Run one complete unit of work. Retry the whole transaction at most three times for
+        deadlock, serialization failure, or lock-not-available; never retry partial statements."""
+        retryable = (psycopg.errors.DeadlockDetected, psycopg.errors.SerializationFailure,
+                     psycopg.errors.LockNotAvailable)
+        for attempt in range(1, 4):
             try:
                 with self.tx() as conn:
                     return fn(conn)
-            except (psycopg.errors.DeadlockDetected, psycopg.errors.SerializationFailure):
-                if attempt == 2:
+            except retryable:
+                if attempt == 3:
                     raise
 
 

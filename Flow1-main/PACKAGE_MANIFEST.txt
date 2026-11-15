@@ -1,0 +1,18 @@
+Stage 5 package manifest
+
+New migration: db/sql/007_stage5.sql
+Migration runner: unchanged; discovery uses existing 3-digit naming convention.
+Eight Stage 5 tables: discount_policies, request_commercial_state, commercial_snapshots,
+commercial_snapshot_items, discount_approvals, discount_approval_history,
+pre_invoice_commercial_links, discount_application_events.
+
+Protected paths excluded from overlay:
+- db/sql/001_initial_mvp.sql
+- db/sql/002_harden_mvp.sql
+- db/sql/004_pre_invoices.sql
+- db/sql/005_cancel_constraints.sql
+- db/sql/006_request_cancel_guard.sql
+- db/sql/runner.py
+
+The overlay replaces only the paths listed in README_STAGE5.txt and adds the new paths.
+No tests were run. Python compileall completed successfully during package preparation.

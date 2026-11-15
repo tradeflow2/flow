@@ -26,12 +26,23 @@ def psql(db: str, sql: str, *, tuples=True):
         + (["-At", "-F", "|"] if tuples else [])
     )
 
-    r = subprocess.run(
-        args,
-        input=sql,
-        capture_output=True,
-        text=True,
-    )
+    env = os.environ.copy()
+    env["PGCLIENTENCODING"] = "UTF8"
+
+    try:
+        r = subprocess.run(
+            args,
+            input=sql,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"psql timed out after 60 seconds. Database: {db}"
+        ) from exc
 
     return r.returncode, r.stdout, r.stderr
 
@@ -46,6 +57,7 @@ def make_db(
         "004_pre_invoices.sql",
         "005_cancel_constraints.sql",
         "006_request_cancel_guard.sql",
+        "007_stage5.sql",
         "998_dev_seed_auth.sql",
     ),
 ):
@@ -86,6 +98,7 @@ def make_db(
             ],
             capture_output=True,
             text=True,
+            timeout=120,
         )
 
         if r.returncode:

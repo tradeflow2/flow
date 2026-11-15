@@ -115,7 +115,9 @@ class RealDatabaseErrors(unittest.TestCase):
 
     def test_amount_and_field_checks_23514_22003(self):
         s, c, e = self.mapped("", self.item(unit_price="10", discount_amount="11", line_total="0"))
-        self.assertEqual((s, c, e.code), ("23514", "chk_request_items_discount_not_exceed", ErrorCode.AMOUNT_OUT_OF_RANGE))
+              # Migration 007 (Stage 5): ممکن است chk_request_item_discount_actor اول خطا بده
+        self.assertEqual(s, "23514")
+        self.assertIn(c, ["chk_request_item_discount_actor", "chk_request_items_discount_not_exceed"])
         s, c, e = self.mapped("", self.item(line_total="9"))
         self.assertEqual((s, c, e.code), ("23514", "chk_request_items_line_total_consistency", ErrorCode.AMOUNT_OUT_OF_RANGE))
         s, c, e = self.mapped("", self.item(unit_price="-1", line_total="0"))

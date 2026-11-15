@@ -20,6 +20,7 @@ from tradeflow_core.state import (Status, SubmitItem, assert_editable, assert_pr
 
 from . import serialize
 from .queries import like_pattern, not_found, page_args, write_audit
+from .commercial_mutations import invalidate_approvals
 
 _HEADER = ("SELECT r.*, c.name AS customer_name FROM purchase_requests r JOIN customers c ON c.id = r.customer_id"
            " WHERE r.id = %s AND r.organization_id = %s")
@@ -119,12 +120,17 @@ class RequestService:
         preview_header_totals(lines)
 
     def _insert_item(self, conn, p, rid, m: dict):
-        return conn.execute(
+        item_id=conn.execute(
             "INSERT INTO purchase_request_items (organization_id, purchase_request_id, product_id, quantity, unit_id, bundle_count,"
-            " estimated_weight, unit_price, discount_amount, tax_amount, line_total, notes, specifications, created_at)"
-            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, clock_timestamp()) RETURNING id",
+            " estimated_weight, unit_price, discount_amount, discount_applied_by, tax_amount, line_total, notes, specifications, created_at)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, clock_timestamp()) RETURNING id",
             (p.org_id, rid, m["product_id"], m["quantity"], m["unit_id"], m["bundle_count"], m["estimated_weight"],
-             m["unit_price"], m["discount_amount"], m["tax_amount"], m["line_total"], m["notes"], Jsonb(m["specifications"]))).fetchone()["id"]
+             m["unit_price"], m["discount_amount"], (p.user_id if Decimal(m["discount_amount"]) > 0 else None),
+             m["tax_amount"], m["line_total"], m["notes"], Jsonb(m["specifications"]))).fetchone()["id"]
+        if Decimal(m["discount_amount"]) > 0:
+            conn.execute("INSERT INTO discount_application_events(organization_id,request_id,actor_id,event_type,amount,event_data) VALUES(%s,%s,%s,'DISCOUNT_SET',%s,%s)",
+                         (p.org_id,rid,p.user_id,m["discount_amount"],Jsonb({"source_item_id":str(item_id)})))
+        return item_id
 
     def _item_row(self, conn, p, item_id):
         return conn.execute(_ITEMS + " WHERE i.id = %s AND i.organization_id = %s", (item_id, p.org_id)).fetchone()
@@ -201,6 +207,7 @@ class RequestService:
             r = self._header(conn, p, rid, lock=True)
             self._authorize_write(p, r)
             assert_editable(r["status"])
+            conn.execute("SELECT current_version FROM request_commercial_state WHERE organization_id=%s AND request_id=%s FOR UPDATE",(p.org_id,rid)).fetchone()
             current = serialize.request_header(r)
             check_not_stale(client_ts, r["updated_at"], {**current, "items": [serialize.request_item(i) for i in self._items(conn, rid, p.org_id)]})
             flat = {"customer_id": current["customer"]["id"], "requested_delivery_date": current["requested_delivery_date"], "notes": current["notes"]}
@@ -208,6 +215,8 @@ class RequestService:
             real = {k: v for k, v in wire.items() if flat[k] != v}
             if not real:
                 return self._detail(conn, p, rid)
+            if set(real) & {"customer_id", "requested_delivery_date"}:
+                invalidate_approvals(conn, p, rid, "purchase request commercial header changed")
             if "customer_id" in real:
                 self._check_ref(conn, "customers", "customer_id", real["customer_id"], p.org_id)
             conn.execute(f"UPDATE purchase_requests SET {', '.join(f'{k} = %s' for k in real)}, updated_by = %s WHERE id = %s AND organization_id = %s",
@@ -274,8 +283,11 @@ class RequestService:
             r = self._header(conn, p, rid, lock=True)
             self._authorize_write(p, r)
             assert_editable(r["status"])
+            conn.execute("SELECT current_version FROM request_commercial_state WHERE organization_id=%s AND request_id=%s FOR UPDATE",(p.org_id,rid)).fetchone()
+            conn.execute("SELECT id FROM purchase_request_items WHERE organization_id=%s AND purchase_request_id=%s ORDER BY created_at,id FOR UPDATE",(p.org_id,rid)).fetchall()
             m = self._prepare_item(conn, p, inp, "")
             self._precheck_totals(self._items(conn, rid, p.org_id), extra=[m])
+            invalidate_approvals(conn, p, rid, "purchase request item added")
             item_id = str(self._insert_item(conn, p, rid, m))
             item = serialize.request_item(self._item_row(conn, p, item_id))
             write_audit(conn, p, "CREATE", "PURCHASE_REQUEST_ITEM", item_id, new=item, ip=ip)
@@ -289,6 +301,8 @@ class RequestService:
             raise not_found("purchase_request_item")
         rid = str(pre["purchase_request_id"])
         header = self._header(conn, p, rid, lock=True)
+        conn.execute("SELECT current_version FROM request_commercial_state WHERE organization_id=%s AND request_id=%s FOR UPDATE",(p.org_id,rid)).fetchone()
+        conn.execute("SELECT id FROM purchase_request_items WHERE id=%s AND organization_id=%s FOR UPDATE",(item_id,p.org_id)).fetchone()
         item = self._item_row(conn, p, item_id)
         if item is None:
             raise not_found("purchase_request_item")
@@ -320,10 +334,16 @@ class RequestService:
             if not changed:
                 return {"item": current, "request": serialize.request_header(header)}
             self._precheck_totals(self._items(conn, rid, p.org_id), replace_id=item_id, extra=[m])
+            if set(changed) & {"quantity", "unit_id", "bundle_count", "estimated_weight", "unit_price", "discount_amount", "tax_amount", "line_total", "specifications"}:
+                invalidate_approvals(conn, p, rid, "purchase request item changed")
             conn.execute("UPDATE purchase_request_items SET quantity=%s, unit_id=%s, bundle_count=%s, estimated_weight=%s, unit_price=%s,"
-                         " discount_amount=%s, tax_amount=%s, line_total=%s, notes=%s, specifications=%s WHERE id=%s AND organization_id=%s",
+                         " discount_amount=%s, discount_applied_by=%s, tax_amount=%s, line_total=%s, notes=%s, specifications=%s WHERE id=%s AND organization_id=%s",
                          (m["quantity"], m["unit_id"], m["bundle_count"], m["estimated_weight"], m["unit_price"], m["discount_amount"],
+                          (p.user_id if Decimal(m["discount_amount"]) != Decimal(item["discount_amount"]) and Decimal(m["discount_amount"]) > 0 else (None if Decimal(m["discount_amount"]) == 0 else item["discount_applied_by"])),
                           m["tax_amount"], m["line_total"], m["notes"], Jsonb(m["specifications"]), item_id, p.org_id))
+            if Decimal(m["discount_amount"]) != Decimal(item["discount_amount"]):
+                conn.execute("INSERT INTO discount_application_events(organization_id,request_id,actor_id,event_type,amount,event_data) VALUES(%s,%s,%s,%s,%s,%s)",
+                             (p.org_id,rid,p.user_id,"DISCOUNT_SET" if Decimal(m["discount_amount"]) else "DISCOUNT_CLEARED",m["discount_amount"],Jsonb({"source_item_id":item_id})))
             new_item = serialize.request_item(self._item_row(conn, p, item_id))
             old_d = {k: (current["unit"]["id"] if k == "unit_id" else current[k]) for k in changed}
             new_d = {k: (new_item["unit"]["id"] if k == "unit_id" else new_item[k]) for k in changed}
@@ -340,6 +360,7 @@ class RequestService:
             self._authorize_write(p, header)
             assert_editable(header["status"])
             old = serialize.request_item(item)
+            invalidate_approvals(conn, p, rid, "purchase request item deleted")
             conn.execute("DELETE FROM purchase_request_items WHERE id = %s AND organization_id = %s", (item_id, p.org_id))
             write_audit(conn, p, "DELETE", "PURCHASE_REQUEST_ITEM", item_id, old=old, ip=ip)
             return {"request": serialize.request_header(self._header(conn, p, rid))}
@@ -368,6 +389,8 @@ class RequestService:
             r = self._header(conn, p, rid, lock=True)
             self._authorize_write(p, r)
             assert_editable(r["status"])
+            conn.execute("SELECT current_version FROM request_commercial_state WHERE organization_id=%s AND request_id=%s FOR UPDATE",(p.org_id,rid)).fetchone()
+            conn.execute("SELECT id FROM purchase_request_items WHERE organization_id=%s AND purchase_request_id=%s ORDER BY created_at,id FOR UPDATE",(p.org_id,rid)).fetchall()
             current_view = self._pricing_view(conn, p, rid)
             check_not_stale(client_ts, r["updated_at"], current_view)
             rows = {str(i["id"]): i for i in self._items(conn, rid, p.org_id)}
@@ -386,9 +409,13 @@ class RequestService:
             all_lines = [Line(Decimal(x["quantity"]), Decimal(x["unit_price"]), Decimal(x["discount_amount"]), Decimal(x["tax_amount"]))
                          for x in (replaced.get(k, rows[k]) for k in rows)]
             preview_header_totals(all_lines)
+            invalidate_approvals(conn, p, rid, "purchase request pricing changed")
             for row, new, lt in updates:
-                conn.execute("UPDATE purchase_request_items SET unit_price=%s, discount_amount=%s, tax_amount=%s, line_total=%s WHERE id=%s AND organization_id=%s",
-                             (new["unit_price"], new["discount_amount"], new["tax_amount"], lt, row["id"], p.org_id))
+                conn.execute("UPDATE purchase_request_items SET unit_price=%s, discount_amount=%s, discount_applied_by=%s, tax_amount=%s, line_total=%s WHERE id=%s AND organization_id=%s",
+                             (new["unit_price"], new["discount_amount"], (p.user_id if Decimal(new["discount_amount"]) != Decimal(row["discount_amount"]) and Decimal(new["discount_amount"]) > 0 else (None if Decimal(new["discount_amount"]) == 0 else row["discount_applied_by"])), new["tax_amount"], lt, row["id"], p.org_id))
+                if Decimal(new["discount_amount"]) != Decimal(row["discount_amount"]):
+                    conn.execute("INSERT INTO discount_application_events(organization_id,request_id,actor_id,event_type,amount,event_data) VALUES(%s,%s,%s,%s,%s,%s)",
+                                 (p.org_id,rid,p.user_id,"DISCOUNT_SET" if Decimal(new["discount_amount"]) else "DISCOUNT_CLEARED",new["discount_amount"],Jsonb({"source_item_id":str(row["id"])})))
                 old_d = {k: serialize._money(row[k]) for k in _ITEM_PRICES if Decimal(new[k]) != Decimal(row[k])}
                 new_d = {k: serialize._money(new[k]) for k in old_d}
                 write_audit(conn, p, "UPDATE", "PURCHASE_REQUEST_ITEM", str(row["id"]), old=old_d, new=new_d, ip=ip)

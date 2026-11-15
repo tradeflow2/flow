@@ -46,10 +46,10 @@ def check(name, condition):
 # Migration discovery and ordering
 # ---------------------------------------------------------
 
-expected_migrations = ["001", "002", "003", "004", "005", "006"]
+expected_migrations = ["001", "002", "003", "004", "005", "006", "007"]
 
 check(
-    "migrations are 001,002,003,004,005,006 in order",
+    "migrations are 001..007 in order",
     [migration.version for migration in ms] == expected_migrations,
 )
 
@@ -72,7 +72,7 @@ check(
 # ---------------------------------------------------------
 
 check(
-    "fresh DB: all six pending in order",
+    "fresh DB: all seven pending in order",
     [
         migration.version
         for migration in runner.find_pending(ms, {})
@@ -95,42 +95,48 @@ ap3 = applied_through("003")
 ap4 = applied_through("004")
 ap5 = applied_through("005")
 ap6 = applied_through("006")
+ap7 = applied_through("007")
 
 check(
-    "001+002 applied: 003,004,005,006 pending",
+    "001+002 applied: 003..007 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap)
-    ] == ["003", "004", "005", "006"],
+    ] == ["003", "004", "005", "006", "007"],
 )
 
 check(
-    "001-003 applied: 004,005,006 pending",
+    "001-003 applied: 004..007 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap3)
-    ] == ["004", "005", "006"],
+    ] == ["004", "005", "006", "007"],
 )
 
 check(
-    "001-004 applied: 005,006 pending",
+    "001-004 applied: 005,006,007 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap4)
-    ] == ["005", "006"],
+    ] == ["005", "006", "007"],
 )
 
 check(
-    "001-005 applied: only 006 pending",
+    "001-005 applied: 006,007 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap5)
-    ] == ["006"],
+    ] == ["006", "007"],
 )
 
 check(
-    "001-006 applied: nothing pending",
-    runner.find_pending(ms, ap6) == [],
+    "001-006 applied: only 007 pending",
+    [m.version for m in runner.find_pending(ms, ap6)] == ["007"],
+)
+
+check(
+    "001-007 applied: nothing pending",
+    runner.find_pending(ms, ap7) == [],
 )
 
 # ---------------------------------------------------------
@@ -142,6 +148,7 @@ expected_names = {
     "004": "pre_invoices",
     "005": "cancel_constraints",
     "006": "request_cancel_guard",
+    "007": "stage5",
 }
 
 for version, expected_name in expected_names.items():
@@ -186,6 +193,7 @@ for version, applied in (
     ("004", ap4),
     ("005", ap5),
     ("006", ap6),
+    ("007", ap7),
 ):
     migration = by_version[version]
     corrupted = {

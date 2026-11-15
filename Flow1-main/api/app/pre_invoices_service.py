@@ -19,6 +19,7 @@ from tradeflow_core.errors import AppError, ErrorCode
 
 from . import serialize
 from .queries import like_pattern, not_found, page_args, write_audit
+from .snapshot_service import SnapshotService
 
 log = logging.getLogger("tradeflow.pdf")
 
@@ -80,56 +81,68 @@ class PreInvoiceService:
     def create(self, p, request_id: str, body, ip: str) -> dict:
         request_id = inputs.parse_uuid(request_id, "id")
         supersedes_id = pi.parse_create(body)
-        authorize(p.role_code, Cap.PREINVOICE_CREATE, caller_id=p.user_id, owner_id=p.user_id)     # role first
+        authorize(p.role_code, Cap.PREINVOICE_CREATE, caller_id=p.user_id, owner_id=p.user_id)
 
         def work(conn):
-            req = self._lock_request(conn, p, request_id)                                          # 1) request header
+            req = self._lock_request(conn, p, request_id)
             authorize(p.role_code, Cap.PREINVOICE_CREATE, caller_id=p.user_id, owner_id=str(req["created_by"]))
             if req["status"] != "SUBMITTED":
                 raise _conflict("SOURCE_NOT_SUBMITTED", status=req["status"])
             live = {r["status"]: str(r["id"]) for r in conn.execute(
-                "SELECT id, status FROM pre_invoices WHERE organization_id = %s AND source_request_id = %s"
-                " AND status IN ('DRAFT', 'ISSUED')", (p.org_id, request_id)).fetchall()}
-            if "ISSUED" in live:
-                raise _conflict("ACTIVE_PRE_INVOICE_EXISTS", pre_invoice_id=live["ISSUED"])
-            if "DRAFT" in live:
-                raise _conflict("OPEN_DRAFT_EXISTS", pre_invoice_id=live["DRAFT"])
-
+                "SELECT id,status FROM pre_invoices WHERE organization_id=%s AND source_request_id=%s AND status IN ('DRAFT','ISSUED')",
+                (p.org_id, request_id)).fetchall()}
+            if "ISSUED" in live: raise _conflict("ACTIVE_PRE_INVOICE_EXISTS", pre_invoice_id=live["ISSUED"])
+            if "DRAFT" in live: raise _conflict("OPEN_DRAFT_EXISTS", pre_invoice_id=live["DRAFT"])
             prev = None
-            if supersedes_id is not None:                                                          # 2) the document being replaced
-                prev = conn.execute("SELECT * FROM pre_invoices WHERE id = %s AND organization_id = %s FOR UPDATE",
-                                    (supersedes_id, p.org_id)).fetchone()
-                if prev is None:
-                    raise AppError(ErrorCode.REFERENCE_NOT_FOUND,
-                                   details=[{"field": "supersedes_id", "reason": ErrorCode.REFERENCE_NOT_FOUND.value}])
-                authorize(p.role_code, Cap.PREINVOICE_READ, caller_id=p.user_id,
-                          owner_id=self._owner_id(conn, p, prev["source_request_id"]))
-                if str(prev["source_request_id"]) == request_id:
-                    raise inputs.verr("supersedes_id", "SAME_SOURCE_REQUEST")
-                if prev["status"] != "ISSUED":
-                    raise _conflict("NOT_ISSUED", status=prev["status"])
+            if supersedes_id is not None:
+                prev = conn.execute("SELECT * FROM pre_invoices WHERE id=%s AND organization_id=%s FOR UPDATE",
+                                    (supersedes_id,p.org_id)).fetchone()
+                if prev is None: raise AppError(ErrorCode.REFERENCE_NOT_FOUND,details=[{"field":"supersedes_id","reason":ErrorCode.REFERENCE_NOT_FOUND.value}])
+                authorize(p.role_code,Cap.PREINVOICE_READ,caller_id=p.user_id,owner_id=self._owner_id(conn,p,prev["source_request_id"]))
+                if str(prev["source_request_id"])==request_id: raise inputs.verr("supersedes_id","SAME_SOURCE_REQUEST")
+                if prev["status"]!="ISSUED": raise _conflict("NOT_ISSUED",status=prev["status"])
 
-            seller = conn.execute("SELECT * FROM organizations WHERE id = %s", (p.org_id,)).fetchone()
-            customer = conn.execute("SELECT * FROM customers WHERE id = %s AND organization_id = %s",
-                                    (req["customer_id"], p.org_id)).fetchone()
-            items = conn.execute(_SOURCE_ITEMS, (request_id, p.org_id)).fetchall()
-            snap = pi.build_snapshot(seller, customer, req, items)
+            commercial = SnapshotService(self.db).create_in_tx(conn,p,request_id)
+            seller = dict(commercial["seller_snapshot"])
+            customer = dict(commercial["customer_snapshot"])
+            head = {
+                "request_number": commercial["request_number"], "request_date": commercial["request_date"],
+                "requested_delivery_date": commercial["requested_delivery_date"], "request_notes": commercial["request_notes"],
+                "customer_id": commercial["customer_id"], "subtotal": commercial["subtotal"],
+                "discount_total": commercial["discount_total"], "tax_total": commercial["tax_total"],
+                "grand_total": commercial["grand_total"],
+            }
+            for col in ("name","legal_name","national_id","economic_code","registration_number","phone","email","address","postal_code"):
+                head["seller_"+col]=seller[col]
+            customer_map={"type":"customer_type","name":"name","national_id":"national_id","economic_code":"economic_code",
+                          "registration_number":"registration_number","mobile":"mobile","phone":"phone","email":"email","address":"address","postal_code":"postal_code"}
+            for out_col,src_col in customer_map.items(): head["customer_"+out_col]=customer.get(src_col)
 
-            pid = str(uuid.uuid4())
-            chain_id = str(prev["chain_id"]) if prev else pid
-            head = snap["header"]
-            cols = ["id", "organization_id", "source_request_id", "chain_id", "supersedes_id", "created_by"] + list(head)
-            vals = [pid, p.org_id, request_id, chain_id, None if prev is None else str(prev["id"]), p.user_id] + list(head.values())
-            conn.execute(f"INSERT INTO pre_invoices ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})", vals)   # cols: internal constants
-            for it in snap["items"]:
-                icols = ["organization_id", "pre_invoice_id"] + list(it)
-                ivals = [p.org_id, pid] + [Jsonb(v) if k == "specifications" else v for k, v in it.items()]
-                conn.execute(f"INSERT INTO pre_invoice_items ({', '.join(icols)}) VALUES ({', '.join(['%s'] * len(icols))})", ivals)
-            write_audit(conn, p, "CREATE", "PRE_INVOICE", pid,
-                        new=pi.audit_data(id=pid, status="DRAFT", source_request_id=request_id, request_number=req["request_number"],
-                                          supersedes_id=None if prev is None else prev["id"], chain_id=chain_id,
-                                          grand_total=req["grand_total"]), ip=ip)
-            return self._detail(conn, p, pid)
+            pid=str(uuid.uuid4()); chain_id=str(prev["chain_id"]) if prev else pid
+            cols=["id","organization_id","source_request_id","chain_id","supersedes_id","created_by"]+list(head)
+            vals=[pid,p.org_id,request_id,chain_id,None if prev is None else str(prev["id"]),p.user_id]+list(head.values())
+            conn.execute(f"INSERT INTO pre_invoices ({', '.join(cols)}) VALUES ({', '.join(['%s']*len(cols))})",vals)
+            snap_items=conn.execute("SELECT * FROM commercial_snapshot_items WHERE organization_id=%s AND snapshot_id=%s ORDER BY line_no",
+                                    (p.org_id,commercial["id"])).fetchall()
+            for it in snap_items:
+                values={"line_no":it["line_no"],"source_item_id":it["source_item_id"],"product_id":it["product_id"],
+                    "product_code":it["product_code"],"product_name":it["product_name"],"unit_id":it["unit_id"],
+                    "unit_code":it["unit_code"],"unit_name":it["unit_name"],"quantity":it["quantity"],
+                    "bundle_count":it["bundle_count"],"estimated_weight":it["estimated_weight"],"unit_price":it["unit_price"],
+                    "discount_amount":it["item_discount_amount"]+it["request_discount_allocation"],"tax_amount":it["tax_amount"],
+                    "line_total":it["line_total"],"notes":it["notes"],"specifications":Jsonb(it["specifications"])}
+                icols=["organization_id","pre_invoice_id"]+list(values)
+                conn.execute(f"INSERT INTO pre_invoice_items ({', '.join(icols)}) VALUES ({', '.join(['%s']*len(icols))})",
+                             [p.org_id,pid]+list(values.values()))
+            approval=conn.execute("SELECT id FROM discount_approvals WHERE organization_id=%s AND snapshot_id=%s AND status='APPROVED'",
+                                  (p.org_id,commercial["id"])).fetchone()
+            conn.execute("""INSERT INTO pre_invoice_commercial_links(organization_id,pre_invoice_id,source_request_id,snapshot_id,approval_id,commercial_version)
+                         VALUES(%s,%s,%s,%s,%s,%s)""",
+                         (p.org_id,pid,request_id,commercial["id"],None if approval is None else approval["id"],commercial["commercial_version"]))
+            write_audit(conn,p,"CREATE","PRE_INVOICE",pid,new=pi.audit_data(id=pid,status="DRAFT",source_request_id=request_id,
+                request_number=req["request_number"],supersedes_id=None if prev is None else prev["id"],chain_id=chain_id,
+                grand_total=commercial["grand_total"]),ip=ip)
+            return self._detail(conn,p,pid)
         return self.db.run(work)
 
     # ------------------------------------------------------------------ read

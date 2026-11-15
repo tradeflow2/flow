@@ -58,7 +58,7 @@ INSERT INTO product_specification_fields (organization_id, template_id, name, co
 
 
 def build_db():
-    """Build the database ONCE per test process (migrations 001-003 + seed 998) and add a second organization 'OTHER'."""
+    """Build the database ONCE per test process (migrations 001-007 + seed 998) and add a second organization 'OTHER'."""
     global _READY
     if _READY:
         return

@@ -96,7 +96,7 @@ _PRE_INVOICE_INDEXES = {            # 004: reached only if two writers slip past
     "uq_pre_invoices_issued_per_chain": "ACTIVE_PRE_INVOICE_EXISTS",
     "uq_pre_invoices_one_successor": "ALREADY_REPLACED",
 }
-_RETRYABLE = {"40P01", "40001"}
+_RETRYABLE = {"40P01", "40001", "55P03"}
 
 
 def map_pg_error(sqlstate: str, constraint: str | None = None, message: str = "") -> AppError:
@@ -106,6 +106,8 @@ def map_pg_error(sqlstate: str, constraint: str | None = None, message: str = ""
     they become INTERNAL_ERROR rather than a misleading client error.
     """
     msg = message or ""
+    if sqlstate == "42501":
+        return AppError(ErrorCode.FORBIDDEN_ROLE)
     if sqlstate == "55000":
         return AppError(ErrorCode.STATE_CONFLICT)
     if "specification snapshot" in msg:
