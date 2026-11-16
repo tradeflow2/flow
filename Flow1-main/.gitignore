@@ -1,0 +1,9 @@
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Test results
+*_test_results.txt
+test_import.py
