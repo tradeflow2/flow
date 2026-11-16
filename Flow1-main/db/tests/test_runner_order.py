@@ -46,10 +46,10 @@ def check(name, condition):
 # Migration discovery and ordering
 # ---------------------------------------------------------
 
-expected_migrations = ["001", "002", "003", "004", "005", "006", "007"]
+expected_migrations = ["001", "002", "003", "004", "005", "006", "007", "008"]
 
 check(
-    "migrations are 001..007 in order",
+    "migrations are 001,002,003,004,005,006,007,008 in order",
     [migration.version for migration in ms] == expected_migrations,
 )
 
@@ -72,7 +72,7 @@ check(
 # ---------------------------------------------------------
 
 check(
-    "fresh DB: all seven pending in order",
+    "fresh DB: all eight pending in order",
     [
         migration.version
         for migration in runner.find_pending(ms, {})
@@ -96,47 +96,59 @@ ap4 = applied_through("004")
 ap5 = applied_through("005")
 ap6 = applied_through("006")
 ap7 = applied_through("007")
+ap8 = applied_through("008")
 
 check(
-    "001+002 applied: 003..007 pending",
+    "001+002 applied: 003..008 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap)
-    ] == ["003", "004", "005", "006", "007"],
+    ] == ["003", "004", "005", "006", "007", "008"],
 )
 
 check(
-    "001-003 applied: 004..007 pending",
+    "001-003 applied: 004..008 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap3)
-    ] == ["004", "005", "006", "007"],
+    ] == ["004", "005", "006", "007", "008"],
 )
 
 check(
-    "001-004 applied: 005,006,007 pending",
+    "001-004 applied: 005..008 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap4)
-    ] == ["005", "006", "007"],
+    ] == ["005", "006", "007", "008"],
 )
 
 check(
-    "001-005 applied: 006,007 pending",
+    "001-005 applied: 006..008 pending",
     [
         migration.version
         for migration in runner.find_pending(ms, ap5)
-    ] == ["006", "007"],
+    ] == ["006", "007", "008"],
 )
 
 check(
-    "001-006 applied: only 007 pending",
-    [m.version for m in runner.find_pending(ms, ap6)] == ["007"],
+    "001-006 applied: 007,008 pending",
+    [
+        migration.version
+        for migration in runner.find_pending(ms, ap6)
+    ] == ["007", "008"],
 )
 
 check(
-    "001-007 applied: nothing pending",
-    runner.find_pending(ms, ap7) == [],
+    "001-007 applied: only 008 pending",
+    [
+        migration.version
+        for migration in runner.find_pending(ms, ap7)
+    ] == ["008"],
+)
+
+check(
+    "001-008 applied: nothing pending",
+    runner.find_pending(ms, ap8) == [],
 )
 
 # ---------------------------------------------------------
@@ -149,6 +161,7 @@ expected_names = {
     "005": "cancel_constraints",
     "006": "request_cancel_guard",
     "007": "stage5",
+    "008": "stage6_payments",
 }
 
 for version, expected_name in expected_names.items():
@@ -162,26 +175,29 @@ for version, expected_name in expected_names.items():
 # Out-of-order migration protection
 # ---------------------------------------------------------
 
-try:
-    runner.find_pending(
-        ms,
-        {
-            "001": ap["001"],
-            "003": (
-                by_version["003"].name,
-                by_version["003"].checksum,
-            ),
-        },
-    )
+if len(ms) >= 3 and "001" in ap:
+    try:
+        runner.find_pending(
+            ms,
+            {
+                "001": ap["001"],
+                "003": (ms[2].name, ms[2].checksum),
+            },
+        )
+        check(
+            "003 applied without 002 is refused",
+            False,
+        )
+    except RuntimeError as exc:
+        check(
+            "003 applied without 002 -> 002 refused (no out-of-order)",
+            "Out-of-order migration(s) would be applied below the newest applied version"
+            in str(exc),
+        )
+else:
     check(
         "003 applied without 002 is refused",
         False,
-    )
-
-except RuntimeError as exc:
-    check(
-        "003 applied without 002 is refused with out-of-order error",
-        "Out-of-order migration(s)" in str(exc),
     )
 
 # ---------------------------------------------------------
@@ -194,6 +210,7 @@ for version, applied in (
     ("005", ap5),
     ("006", ap6),
     ("007", ap7),
+    ("008", ap8),
 ):
     migration = by_version[version]
     corrupted = {

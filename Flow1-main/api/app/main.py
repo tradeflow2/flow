@@ -19,6 +19,7 @@ from .audit_service import AuditService
 from .discount_service import DiscountService
 from .approval_service import ApprovalService
 from .snapshot_service import SnapshotService
+from .payment_service import PaymentService
 from .auth_service import AuthService
 from .customers_service import CustomerService
 from .http_utils import error_response, rid
@@ -26,7 +27,9 @@ from .pre_invoices_service import PreInvoiceService
 from .products_service import ProductService
 from .requests_service import RequestService
 from .routes import (audit as audit_routes, auth as auth_routes, master as master_routes, pre_invoices as pre_invoice_routes,
-                     requests as request_routes, discounts as discount_routes, approvals as approval_routes, discount_policies as discount_policy_routes, snapshots as snapshot_routes)
+                     requests as request_routes, discounts as discount_routes, approvals as approval_routes,
+                     discount_policies as discount_policy_routes, snapshots as snapshot_routes,
+                     payments as payment_routes)
 
 log = logging.getLogger("tradeflow")
 
@@ -78,8 +81,10 @@ def create_app(settings, db=None, limiter=None, clock=None, pdf_renderer=None) -
     ctx = SimpleNamespace(auth=auth, principal=principal, customers=CustomerService(db), products=ProductService(db),
                           requests=RequestService(db, **kw), audits=AuditService(db),
                           pre_invoices=PreInvoiceService(db, pdf_renderer, **kw),
-                          discounts=DiscountService(db), approvals=ApprovalService(db), snapshots=SnapshotService(db))
-    for module in (auth_routes, master_routes, request_routes, pre_invoice_routes, audit_routes, discount_routes, approval_routes, discount_policy_routes, snapshot_routes):
+                          discounts=DiscountService(db), approvals=ApprovalService(db), snapshots=SnapshotService(db),
+                          payments=PaymentService(db, **kw))
+    for module in (auth_routes, master_routes, request_routes, pre_invoice_routes, audit_routes,
+                   discount_routes, approval_routes, discount_policy_routes, snapshot_routes, payment_routes):
         app.include_router(module.build(ctx))
     app.state.principal = principal
     return app

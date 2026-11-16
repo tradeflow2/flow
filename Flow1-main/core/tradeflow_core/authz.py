@@ -31,6 +31,9 @@ class Cap(str, Enum):
     PREINVOICE_CANCEL_DRAFT = "pre_invoices:cancel_draft"    # SALES: own source requests only
     PREINVOICE_CANCEL_ISSUED = "pre_invoices:cancel_issued"
     PREINVOICE_PDF = "pre_invoices:pdf"                      # generate / retry the PDF
+    # 🟢 Stage 6 (S6-A): payments
+    PAYMENT_CREATE = "payments:create"
+    PAYMENT_READ = "payments:read"
 
 
 _ALL = set(Role)
@@ -52,11 +55,16 @@ MATRIX: dict[Cap, frozenset[Role]] = {
     Cap.PREINVOICE_CANCEL_DRAFT: frozenset({Role.ADMIN, Role.SALES}),
     Cap.PREINVOICE_CANCEL_ISSUED: frozenset({Role.ADMIN, Role.ACCOUNTING}),
     Cap.PREINVOICE_PDF: frozenset({Role.ADMIN, Role.ACCOUNTING}),
+    # 🟢 Stage 6 (S6-A): payments
+    Cap.PAYMENT_CREATE: frozenset({Role.ADMIN, Role.SALES, Role.ACCOUNTING}),
+    Cap.PAYMENT_READ: frozenset({Role.ADMIN, Role.SALES, Role.ACCOUNTING}),
 }
 assert set(MATRIX) == set(Cap)
 OWN_ONLY = {Cap.REQUEST_WRITE: {Role.SALES},          # roles restricted to requests they created
             Cap.PREINVOICE_READ: {Role.SALES}, Cap.PREINVOICE_CREATE: {Role.SALES},
-            Cap.PREINVOICE_CANCEL_DRAFT: {Role.SALES}}
+            Cap.PREINVOICE_CANCEL_DRAFT: {Role.SALES},
+            # 🟢 Stage 6: SALES can only create payments for Pre-Invoices they created
+            Cap.PAYMENT_CREATE: {Role.SALES}}
 
 
 def authorize(role_code: str, cap: Cap, *, caller_id: str | None = None, owner_id: str | None = None) -> None:

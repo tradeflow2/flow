@@ -158,3 +158,31 @@ def pre_invoice(r, document=None) -> dict:
          "updated_at": format_ts(r["updated_at"]),
          "pdf": pre_invoice_document(document)}
     return d
+
+
+def payment(row) -> dict:
+    """Serialize a payments row (Stage 6, S6-A)."""
+    return {
+        "id": str(row["id"]),
+        "organization_id": str(row["organization_id"]),
+        "pre_invoice_id": str(row["pre_invoice_id"]),
+        "pre_invoice_number": row.get("pre_invoice_number"),
+        "payment_method": row["payment_method"],
+        "amount": _money(row["amount"]),
+        "payment_date": row["payment_date"].isoformat() if row["payment_date"] else None,
+        "reference_number": row["reference_number"],
+        "payer_name": row["payer_name"],
+        "bank_name": row["bank_name"],
+        "cheque_number": row["cheque_number"],
+        "cheque_due_date": row["cheque_due_date"].isoformat() if row["cheque_due_date"] else None,
+        "cheque_status": row["cheque_status"],
+        "status": row["status"],
+        "notes": row["notes"],
+        "created_by": str(row["created_by"]),
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "confirmed_by": str(row["confirmed_by"]) if row["confirmed_by"] else None,
+        "confirmed_at": row["confirmed_at"].isoformat() if row["confirmed_at"] else None,
+        "reversed_by": str(row["reversed_by"]) if row["reversed_by"] else None,
+        "reversed_at": row["reversed_at"].isoformat() if row["reversed_at"] else None,
+        "reversal_reason": row["reversal_reason"],
+    }

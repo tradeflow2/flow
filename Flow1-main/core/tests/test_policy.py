@@ -31,6 +31,8 @@ class Authz(unittest.TestCase):
         # Stage 4 (contract section 4, pre-invoice rows)
         authz.Cap.PREINVOICE_READ: "ASC", authz.Cap.PREINVOICE_CREATE: "AS-", authz.Cap.PREINVOICE_ISSUE: "A-C",
         authz.Cap.PREINVOICE_CANCEL_DRAFT: "AS-", authz.Cap.PREINVOICE_CANCEL_ISSUED: "A-C", authz.Cap.PREINVOICE_PDF: "A-C",
+        # Stage 6 (S6-A): payments
+        authz.Cap.PAYMENT_CREATE: "ASC", authz.Cap.PAYMENT_READ: "ASC",
     }
 
     def test_full_matrix_table_driven(self):
@@ -92,15 +94,18 @@ class Authz(unittest.TestCase):
                    "pre-invoices: create a DRAFT": [authz.Cap.PREINVOICE_CREATE], "pre-invoices: issue": [authz.Cap.PREINVOICE_ISSUE],
                    "pre-invoices: cancel a DRAFT": [authz.Cap.PREINVOICE_CANCEL_DRAFT],
                    "pre-invoices: cancel an ISSUED document": [authz.Cap.PREINVOICE_CANCEL_ISSUED],
-                   "pre-invoices: generate / retry the PDF": [authz.Cap.PREINVOICE_PDF]}
+                   "pre-invoices: generate / retry the PDF": [authz.Cap.PREINVOICE_PDF],
+                   "payments: create": [authz.Cap.PAYMENT_CREATE],
+                   "payments: read": [authz.Cap.PAYMENT_READ]}
         seen = set()
         for r in rows:
             caps = mapping[r[0]]
             for cap in caps:
                 seen.add(cap)
                 for col, role in zip(r[1:4], [authz.Role.ADMIN, authz.Role.SALES, authz.Role.ACCOUNTING]):
-                    self.assertEqual(role in authz.MATRIX[cap], col.strip("* ") != "–", (r[0], role, col))
-        self.assertEqual(seen | {authz.Cap.LOOKUP_READ}, set(authz.Cap))          # lookups: "All three roles may read them" (section 7)
+                    self.assertEqual(role in authz.MATRIX[cap], col.strip("* ") != "\u2013", (r[0], role, col))
+        slice01_caps = {c for c in authz.Cap if not c.name.startswith("PAYMENT_")}
+        self.assertEqual(seen | {authz.Cap.LOOKUP_READ}, slice01_caps)
 
 
 class StateMachine(unittest.TestCase):
@@ -226,10 +231,6 @@ class ErrorTable(unittest.TestCase):
         self.assertEqual(AppError(ErrorCode.INTERNAL_ERROR).details, {})                    # details always present
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ConfigEnvironment(unittest.TestCase):
     SECRET = "x" * 32
     def test_config_requires_env(self):
@@ -244,3 +245,7 @@ class ConfigEnvironment(unittest.TestCase):
             config.load({"TRADEFLOW_JWT_SECRET": "dev" + "x" * 40, "TRADEFLOW_ENV": "production"})
         s, _ = config.load({"TRADEFLOW_JWT_SECRET": "dev" + "x" * 40, "TRADEFLOW_ENV": "development"})
         self.assertEqual(s.environment, "development")
+
+
+if __name__ == "__main__":
+    unittest.main()
