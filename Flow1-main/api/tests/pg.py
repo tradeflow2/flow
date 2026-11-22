@@ -48,7 +48,7 @@ def psql(db: str, sql: str, *, tuples=True):
 def make_db(
     name: str,
     sql_dir: str | None = None,
-    files=(
+              files=(
         "001_initial_mvp.sql",
         "002_harden_mvp.sql",
         "003_org_code_and_username.sql",
@@ -56,6 +56,7 @@ def make_db(
         "005_cancel_constraints.sql",
         "006_request_cancel_guard.sql",
         "007_stage5.sql",
+        "008_stage6_payments.sql",
         "998_dev_seed_auth.sql",
     ),
 ):

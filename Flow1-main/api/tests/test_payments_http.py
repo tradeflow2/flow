@@ -4,9 +4,8 @@ from __future__ import annotations
 import unittest
 from datetime import date, timedelta
 
-from fastapi.testclient import TestClient
-
 from tests import support
+from tests.test_requests_http import R, RequestsBase
 
 
 API = "/api/v1"
@@ -19,44 +18,33 @@ def err(r):
 
 
 @unittest.skipUnless(support.ready(), "SKIPPED: needs PostgreSQL (psql) and TF_SQL_DIR")
-class PaymentsHttp(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        support.build_db()
-        cls.c = TestClient(support.make_app())
-        cls.admin = support.headers("admin")
-        cls.sales = support.headers("sales")
-        cls.acct = support.headers("accounting")
-        cls.other = support.headers("admin", "OTHER")
+class PaymentsHttp(RequestsBase):
+    # setUpClass is inherited from RequestsBase (database, client, headers, seed ids): one setup, no duplicates.
 
-        # Create a DRAFT Pre-Invoice for testing
-        cls.pre_invoice_id = support.scalar(
-            """
-            SELECT pi.id
-              FROM pre_invoices pi
-              JOIN purchase_requests r
-                ON r.id = pi.source_request_id
-               AND r.organization_id = pi.organization_id
-             WHERE pi.organization_id = (SELECT id FROM organizations WHERE code = 'DEMO')
-               AND pi.status = 'DRAFT'
-             LIMIT 1
-            """
-        )
-
-    def _payment_body(self, **kw):
+    def _payment_body(self, pre_invoice_id, **kw):
         return {
-            "pre_invoice_id": self.pre_invoice_id,
+            "pre_invoice_id": pre_invoice_id,
             "payment_method": "CASH",
             "amount": "1000000",
             "payment_date": date.today().isoformat(),
             **kw,
         }
 
+    def _new_pre_invoice(self):
+        """An independent DRAFT Pre-Invoice (own request, total 1,000,000) so payments never leak between tests."""
+        d = self.mk(headers=self.sales, items=[self.item(quantity="1000", unit_price="1000")])
+        r = self.c.post(f"{R}/{d['id']}/submit", headers=self.sales)
+        self.assertEqual(r.status_code, 200, r.text)
+        r = self.c.post(f"{R}/{d['id']}/pre-invoices", json={}, headers=self.sales)
+        self.assertEqual(r.status_code, 201, r.text)
+        return r.json()["data"]["id"]
+
     # ------------------------------------------------------------------ create
     def test_create_cash_payment(self):
+        pid = self._new_pre_invoice()
         r = self.c.post(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
-            json=self._payment_body(),
+            f"{API}/pre-invoices/{pid}/payments",
+            json=self._payment_body(pid),
             headers=self.admin,
         )
         self.assertEqual(r.status_code, 201, r.text)
@@ -66,13 +54,15 @@ class PaymentsHttp(unittest.TestCase):
         self.assertEqual(d["amount"], "1000000")
 
     def test_create_bank_transfer(self):
+        pid = self._new_pre_invoice()
         body = self._payment_body(
+            pid,
             payment_method="BANK_TRANSFER",
             reference_number="REF-1",
             bank_name="Melli",
         )
         r = self.c.post(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
+            f"{API}/pre-invoices/{pid}/payments",
             json=body,
             headers=self.admin,
         )
@@ -83,14 +73,16 @@ class PaymentsHttp(unittest.TestCase):
         self.assertEqual(d["bank_name"], "Melli")
 
     def test_create_cheque(self):
+        pid = self._new_pre_invoice()
         body = self._payment_body(
+            pid,
             payment_method="CHEQUE",
             cheque_number="123456",
             bank_name="Melli",
             cheque_due_date=(date.today() + timedelta(days=30)).isoformat(),
         )
         r = self.c.post(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
+            f"{API}/pre-invoices/{pid}/payments",
             json=body,
             headers=self.admin,
         )
@@ -101,33 +93,37 @@ class PaymentsHttp(unittest.TestCase):
         self.assertEqual(d["cheque_status"], "RECEIVED")
 
     def test_create_invalid_method(self):
+        pid = self._new_pre_invoice()
         r = self.c.post(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
-            json=self._payment_body(payment_method="POS"),
+            f"{API}/pre-invoices/{pid}/payments",
+            json=self._payment_body(pid, payment_method="POS"),
             headers=self.admin,
         )
         self.assertEqual(r.status_code, 422)
 
     def test_create_cash_with_cheque_fields(self):
+        pid = self._new_pre_invoice()
         r = self.c.post(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
-            json=self._payment_body(cheque_number="123"),
+            f"{API}/pre-invoices/{pid}/payments",
+            json=self._payment_body(pid, cheque_number="123"),
             headers=self.admin,
         )
         self.assertEqual(r.status_code, 422)
         self.assertEqual(err(r)["code"], "VALIDATION_ERROR")
 
     def test_create_over_allocation(self):
+        pid = self._new_pre_invoice()
         # First payment of 1M
-        self.c.post(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
-            json=self._payment_body(),
+        r1 = self.c.post(
+            f"{API}/pre-invoices/{pid}/payments",
+            json=self._payment_body(pid),
             headers=self.admin,
         )
+        self.assertEqual(r1.status_code, 201, r1.text)
         # Second payment of 999M (should exceed total)
         r = self.c.post(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
-            json=self._payment_body(amount="999000000"),
+            f"{API}/pre-invoices/{pid}/payments",
+            json=self._payment_body(pid, amount="999000000"),
             headers=self.admin,
         )
         self.assertEqual(r.status_code, 409)
@@ -136,13 +132,15 @@ class PaymentsHttp(unittest.TestCase):
 
     # ------------------------------------------------------------------ list
     def test_list_payments(self):
-        self.c.post(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
-            json=self._payment_body(),
+        pid = self._new_pre_invoice()
+        r0 = self.c.post(
+            f"{API}/pre-invoices/{pid}/payments",
+            json=self._payment_body(pid),
             headers=self.admin,
         )
+        self.assertEqual(r0.status_code, 201, r0.text)
         r = self.c.get(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
+            f"{API}/pre-invoices/{pid}/payments",
             headers=self.admin,
         )
         self.assertEqual(r.status_code, 200, r.text)
@@ -151,11 +149,13 @@ class PaymentsHttp(unittest.TestCase):
 
     # ------------------------------------------------------------------ get
     def test_get_payment(self):
+        pi_id = self._new_pre_invoice()
         r = self.c.post(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
-            json=self._payment_body(),
+            f"{API}/pre-invoices/{pi_id}/payments",
+            json=self._payment_body(pi_id),
             headers=self.admin,
         )
+        self.assertEqual(r.status_code, 201, r.text)
         pid = r.json()["data"]["id"]
         r2 = self.c.get(f"{API}/payments/{pid}", headers=self.admin)
         self.assertEqual(r2.status_code, 200, r2.text)
@@ -163,8 +163,9 @@ class PaymentsHttp(unittest.TestCase):
 
     # ------------------------------------------------------------------ tenant isolation
     def test_tenant_isolation(self):
+        pid = self._new_pre_invoice()
         r = self.c.get(
-            f"{API}/pre-invoices/{self.pre_invoice_id}/payments",
+            f"{API}/pre-invoices/{pid}/payments",
             headers=self.other,
         )
         self.assertEqual(r.status_code, 404)

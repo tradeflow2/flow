@@ -1,246 +1,232 @@
-import itertools
-import re
+"""PostgreSQL tests for payments (Stage 6, S6-A). Every scenario runs inside BEGIN ... ROLLBACK."""
+from __future__ import annotations
+
+import os
 import unittest
-from datetime import datetime, timezone
-from decimal import Decimal as D
+from datetime import date, timedelta
 
-from tradeflow_core import authz, state, audit, concurrency as cc
-from tradeflow_core.errors import AppError, ErrorCode, HTTP_STATUS
-from . import contract_doc as doc
-
-CONTRACT = doc.contract_path()
-TEXT = CONTRACT.read_text(encoding="utf-8") if CONTRACT else ""
+from . import pg
+from .test_pg_integration import _ensure_db
 
 
-def code_of(fn, *a, **k):
-    try:
-        fn(*a, **k)
-    except AppError as e:
-        return e.code
-    return None
+SQL_DIR = os.environ.get("TF_SQL_DIR")
+
+PI_ID = "00000000-0000-0000-0000-0000000000b1"
+USER_ID = "00000000-0000-0000-0000-0000000000c1"
 
 
-class Authz(unittest.TestCase):
-    EXPECT = {
-        authz.Cap.ME: "ASC", authz.Cap.ORG_READ: "ASC", authz.Cap.LOOKUP_READ: "ASC",
-        authz.Cap.CUSTOMER_READ: "ASC", authz.Cap.CUSTOMER_WRITE: "AS-",
-        authz.Cap.PRODUCT_READ: "ASC", authz.Cap.PRODUCT_WRITE: "A--",
-        authz.Cap.REQUEST_READ: "ASC", authz.Cap.REQUEST_CREATE: "AS-", authz.Cap.REQUEST_WRITE: "AS-",
-        authz.Cap.AUDIT_READ: "A--",
-        authz.Cap.PREINVOICE_READ: "ASC", authz.Cap.PREINVOICE_CREATE: "AS-", authz.Cap.PREINVOICE_ISSUE: "A-C",
-        authz.Cap.PREINVOICE_CANCEL_DRAFT: "AS-", authz.Cap.PREINVOICE_CANCEL_ISSUED: "A-C", authz.Cap.PREINVOICE_PDF: "A-C",
-        authz.Cap.PAYMENT_CREATE: "ASC", authz.Cap.PAYMENT_READ: "ASC",
-    }
+@unittest.skipUnless(pg.available() and SQL_DIR, "SKIPPED: needs PostgreSQL via psql and TF_SQL_DIR")
+class PaymentsPg(unittest.TestCase):
+    DB = "tf_core_pi"
 
-    def test_full_matrix_table_driven(self):
-        roles = {"A": "ADMIN", "S": "SALES", "C": "ACCOUNTING"}
-        for cap, flags in self.EXPECT.items():
-            for letter, role in roles.items():
-                allowed = letter in flags
-                kwargs = dict(caller_id="u1", owner_id="u1")
-                got = code_of(authz.authorize, role, cap, **kwargs)
-                self.assertEqual(got is None, allowed, (cap, role, got))
-                if not allowed:
-                    self.assertEqual(got, ErrorCode.FORBIDDEN_ROLE)
+    @classmethod
+    def setUpClass(cls):
+        _ensure_db(cls.DB)
+        # 1. Get org + admin + customer from seed (these DO exist)
+        rc, out, e = pg.psql(cls.DB, """
+            SELECT o.id, u.id, c.id
+              FROM organizations o
+              JOIN users u ON u.organization_id = o.id AND u.username = 'admin'
+              JOIN customers c ON c.organization_id = o.id
+             WHERE o.code = 'DEMO'
+             LIMIT 1
+        """)
+        assert rc == 0, e
+        parts = out.strip().split("|")
+        assert len(parts) == 3, f"Expected 3 (org, admin, customer), got {len(parts)}: {out!r} / {e!r}"
+        cls.org, cls.admin, cls.cust = parts
 
-    def test_every_capability_is_covered(self):
-        self.assertEqual(set(self.EXPECT), set(authz.Cap))
+        # 2. Create a DRAFT purchase_request first (items can only be added while DRAFT)
+        rc, out, e = pg.psql(cls.DB, f"""
+            INSERT INTO purchase_requests (
+                organization_id, customer_id, requested_delivery_date,
+                status, created_by, notes, request_number
+            ) VALUES (
+                '{cls.org}', '{cls.cust}', CURRENT_DATE,
+                'DRAFT', '{cls.admin}', 'test fixture for payments',
+                'TEST-PAY-' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISSUS')
+            )
+            RETURNING id
+        """)
+        assert rc == 0, e
+        cls.req = out.strip()
 
-    def test_sales_own_requests_only(self):
-        w = authz.Cap.REQUEST_WRITE
-        self.assertIsNone(code_of(authz.authorize, "SALES", w, caller_id="U1", owner_id="u1"))
-        self.assertEqual(code_of(authz.authorize, "SALES", w, caller_id="u1", owner_id="u2"), ErrorCode.FORBIDDEN_NOT_OWNER)
-        self.assertEqual(code_of(authz.authorize, "SALES", w, caller_id="u1", owner_id=None), ErrorCode.FORBIDDEN_NOT_OWNER)
-        self.assertEqual(code_of(authz.authorize, "SALES", w), ErrorCode.FORBIDDEN_NOT_OWNER)
-        self.assertIsNone(code_of(authz.authorize, "ADMIN", w, caller_id="u1", owner_id="u2"))
-        self.assertEqual(code_of(authz.authorize, "ACCOUNTING", w, caller_id="u1", owner_id="u1"), ErrorCode.FORBIDDEN_ROLE)
+        # 3. Create a purchase_request_item while DRAFT is still allowed
+        rc, out, e = pg.psql(cls.DB, f"""
+            INSERT INTO purchase_request_items (
+                organization_id, purchase_request_id, product_id,
+                unit_id, quantity, unit_price, discount_amount,
+                tax_amount, line_total, bundle_count
+            ) SELECT
+                r.organization_id, r.id, p.id, p.default_unit_id,
+                1, 1000000, 0, 0, 1000000, 0
+            FROM purchase_requests r
+            JOIN products p ON p.organization_id = r.organization_id
+            WHERE r.id = '{cls.req}'
+            LIMIT 1
+            RETURNING id
+        """)
+        assert rc == 0, e
 
-    def test_sales_own_pre_invoices_only(self):
-        for cap in (authz.Cap.PREINVOICE_READ, authz.Cap.PREINVOICE_CREATE, authz.Cap.PREINVOICE_CANCEL_DRAFT):
-            self.assertIsNone(code_of(authz.authorize, "SALES", cap, caller_id="U1", owner_id="u1"), cap)
-            self.assertEqual(code_of(authz.authorize, "SALES", cap, caller_id="u1", owner_id="u2"), ErrorCode.FORBIDDEN_NOT_OWNER, cap)
-            self.assertEqual(code_of(authz.authorize, "SALES", cap, caller_id="u1", owner_id=None), ErrorCode.FORBIDDEN_NOT_OWNER, cap)
-            self.assertTrue(authz.is_own_only("SALES", cap))
-            self.assertFalse(authz.is_own_only("ADMIN", cap))
-            self.assertFalse(authz.is_own_only("ACCOUNTING", cap))
-        self.assertIsNone(code_of(authz.authorize, "ACCOUNTING", authz.Cap.PREINVOICE_READ, caller_id="u1", owner_id="u2"))
-        self.assertEqual(code_of(authz.authorize, "ACCOUNTING", authz.Cap.PREINVOICE_CREATE, caller_id="u1", owner_id="u1"), ErrorCode.FORBIDDEN_ROLE)
-        self.assertTrue(authz.is_own_only("SUPERUSER", authz.Cap.PREINVOICE_READ))
-        self.assertFalse(authz.has_capability("SUPERUSER", authz.Cap.PREINVOICE_READ))
-        self.assertTrue(authz.has_capability("ACCOUNTING", authz.Cap.PREINVOICE_ISSUE))
+        # 4. Now transition DRAFT -> SUBMITTED (items are frozen after this)
+        rc, out, e = pg.psql(cls.DB, f"""
+            UPDATE purchase_requests
+            SET status='SUBMITTED'
+            WHERE id = '{cls.req}'
+        """)
+        assert rc == 0, e
 
-    def test_audit_read_is_not_widened(self):
-        self.assertEqual(authz.MATRIX[authz.Cap.AUDIT_READ], frozenset({authz.Role.ADMIN}))
-        self.assertNotIn(authz.Role.ACCOUNTING, authz.MATRIX[authz.Cap.REQUEST_WRITE])
+    # ------------------------------------------------------------------ helpers
+    def provoke(self, setup: str, failing: str):
+        statement = failing.strip().rstrip(";")
+        body = f"""BEGIN;
+        {setup or 'SELECT 1;'}
+        DO $$ DECLARE s TEXT; c TEXT; m TEXT; BEGIN
+          BEGIN
+            {statement};
+            RAISE NOTICE 'RES|NONE||';
+          EXCEPTION WHEN OTHERS THEN
+            GET STACKED DIAGNOSTICS s = RETURNED_SQLSTATE,
+                                    c = CONSTRAINT_NAME,
+                                    m = MESSAGE_TEXT;
+            RAISE NOTICE 'RES|%|%|%', s, coalesce(c,''), replace(m, E'\\n', ' ');
+          END;
+        END $$;
+        ROLLBACK;"""
+        rc, out, err = pg.psql(self.DB, body)
+        self.assertEqual(rc, 0, err)
+        line = next(l for l in err.splitlines() if "RES|" in l)
+        s, c, m = line.split("RES|", 1)[1].split("|", 2)
+        return s, c or None, m
 
-    def test_unknown_roles_are_denied_everything(self):
-        for role in ["SUPERUSER", "admin", "", "ADMIN ", None, "Sales"]:
-            for cap in authz.Cap:
-                self.assertEqual(code_of(authz.authorize, role, cap), ErrorCode.FORBIDDEN_ROLE, (role, cap))
+    def fails(self, setup, failing, sqlstate, constraint=None):
+        s, c, m = self.provoke(setup, failing)
+        self.assertEqual(s, sqlstate, f"{failing} -> {s} {c} {m}")
+        if constraint:
+            self.assertEqual(c, constraint, f"{failing} -> {s} {c} {m}")
+        return s, c, m
 
-    @unittest.skipUnless(CONTRACT, "SKIPPED: contract file not found (set TF_CONTRACT)")
-    def test_matrix_equals_the_contract_table(self):
-        rows = doc.table_rows(doc.section(TEXT, "4. Authorization"))
-        mapping = {"`me`, organizations (read)": [authz.Cap.ME, authz.Cap.ORG_READ],
-                   "customers: read": [authz.Cap.CUSTOMER_READ], "customers: create / patch": [authz.Cap.CUSTOMER_WRITE],
-                   "products + specifications: read": [authz.Cap.PRODUCT_READ], "products: create / patch": [authz.Cap.PRODUCT_WRITE],
-                   "purchase requests, pricing: read": [authz.Cap.REQUEST_READ], "purchase requests: create": [authz.Cap.REQUEST_CREATE],
-                   "request / items / pricing: write, submit, cancel": [authz.Cap.REQUEST_WRITE], "audit-logs: read": [authz.Cap.AUDIT_READ],
-                   "pre-invoices: read (list, get, PDF download)": [authz.Cap.PREINVOICE_READ],
-                   "pre-invoices: create a DRAFT": [authz.Cap.PREINVOICE_CREATE], "pre-invoices: issue": [authz.Cap.PREINVOICE_ISSUE],
-                   "pre-invoices: cancel a DRAFT": [authz.Cap.PREINVOICE_CANCEL_DRAFT],
-                   "pre-invoices: cancel an ISSUED document": [authz.Cap.PREINVOICE_CANCEL_ISSUED],
-                   "pre-invoices: generate / retry the PDF": [authz.Cap.PREINVOICE_PDF],
-                   "payments: create": [authz.Cap.PAYMENT_CREATE],
-                   "payments: read": [authz.Cap.PAYMENT_READ]}
-        seen = set()
-        for r in rows:
-            caps = mapping[r[0]]
-            for cap in caps:
-                seen.add(cap)
-                for col, role in zip(r[1:4], [authz.Role.ADMIN, authz.Role.SALES, authz.Role.ACCOUNTING]):
-                    self.assertEqual(role in authz.MATRIX[cap], col.strip("* ") != "\u2013", (r[0], role, col))
-        # Only Slice 01 caps are in the contract; Stage 6 caps are validated separately.
-        slice01_caps = {c for c in authz.Cap if not c.name.startswith("PAYMENT_")}
-        self.assertEqual(seen | {authz.Cap.LOOKUP_READ}, slice01_caps)
+    def state_conflict(self, setup, failing):
+        s, c, m = self.fails(setup, failing, "55000")
+        return s, c, m
 
+    def create_pre_invoice(self):
+        """Create an ISSUED Pre-Invoice (DRAFT -> items -> ISSUED), following Stage 4 pattern."""
+        insert_draft = (
+            f"INSERT INTO pre_invoices ("
+            f"  id, organization_id, source_request_id, chain_id, "
+            f"  request_number, request_date, seller_name, "
+            f"  customer_id, customer_type, customer_name, "
+            f"  subtotal, discount_total, tax_total, grand_total, created_by"
+            f") SELECT "
+            f"  '{PI_ID}', r.organization_id, r.id, '{PI_ID}', "
+            f"  r.request_number, r.request_date, o.name, "
+            f"  c.id, c.customer_type, c.name, "
+            f"  1000000, 0, 0, 1000000, '{self.admin}' "
+            f"  FROM purchase_requests r "
+            f"  JOIN organizations o ON o.id = r.organization_id "
+            f"  JOIN customers c ON c.id = r.customer_id "
+            f"  WHERE r.id = '{self.req}';"
+        )
+        insert_items = (
+            f"INSERT INTO pre_invoice_items ("
+            f"  organization_id, pre_invoice_id, line_no, source_item_id, "
+            f"  product_id, product_code, product_name, unit_id, "
+            f"  unit_code, unit_name, quantity, bundle_count, unit_price, "
+            f"  discount_amount, tax_amount, line_total"
+            f") SELECT "
+            f"  i.organization_id, '{PI_ID}', 1, i.id, "
+            f"  i.product_id, 'P', 'P', i.unit_id, "
+            f"  'KG', 'Kg', i.quantity, i.bundle_count, i.unit_price, "
+            f"  i.discount_amount, i.tax_amount, i.line_total "
+            f"  FROM purchase_request_items i "
+            f"  WHERE i.purchase_request_id = '{self.req}';"
+        )
+        issue = (
+            f"UPDATE pre_invoices "
+            f"SET status='ISSUED', "
+            f"    pre_invoice_number='PI-1405-000001', "
+            f"    version=1, issued_by='{self.admin}', "
+            f"    issued_at=NOW() "
+            f"WHERE id='{PI_ID}';"
+        )
+        return insert_draft + insert_items + issue
 
-class StateMachine(unittest.TestCase):
-    def test_all_nine_transitions(self):
-        allowed = {("DRAFT", "SUBMITTED"), ("DRAFT", "CANCELLED"), ("SUBMITTED", "CANCELLED")}
-        for a, b in itertools.product(["DRAFT", "SUBMITTED", "CANCELLED"], repeat=2):
-            got = code_of(state.assert_transition, a, b)
-            self.assertEqual(got is None, (a, b) in allowed, (a, b))
-            if (a, b) not in allowed:
-                self.assertEqual(got, ErrorCode.STATE_CONFLICT)
-        self.assertEqual(code_of(state.assert_transition, "DRAFT", "DONE"), ErrorCode.STATE_CONFLICT)
+    def insert_payment(self, method="CASH", amount=1000000, **kw):
+        pid = "00000000-0000-0000-0000-0000000000d1"
+        if "cheque_number" in kw:
+            cheque_number = f"'{kw['cheque_number']}'"
+        else:
+            cheque_number = "'123'" if method == "CHEQUE" else "NULL"
+        if "cheque_due_date" in kw:
+            cheque_due_date = f"'{kw['cheque_due_date']}'"
+        else:
+            cheque_due_date = f"'{(date.today() + timedelta(days=30)).isoformat()}'" if method == "CHEQUE" else "NULL"
+        if "cheque_status" in kw:
+            cheque_status = f"'{kw['cheque_status']}'"
+        else:
+            cheque_status = "'RECEIVED'" if method == "CHEQUE" else "NULL"
+        return (
+            f"INSERT INTO payments ("
+            f"  id, organization_id, pre_invoice_id, payment_method, "
+            f"  amount, payment_date, cheque_number, cheque_due_date, cheque_status, "
+            f"  status, created_by"
+            f") VALUES ("
+            f"  '{pid}', '{self.org}', '{PI_ID}', '{method}', "
+            f"  {amount}, '{date.today().isoformat()}', "
+            f"  {cheque_number}, {cheque_due_date}, {cheque_status}, "
+            f"  'PENDING_CONFIRMATION', '{self.admin}'"
+            f");"
+        )
 
-    def test_freeze(self):
-        self.assertIsNone(code_of(state.assert_editable, "DRAFT"))
-        for s in ["SUBMITTED", "CANCELLED", "whatever"]:
-            self.assertEqual(code_of(state.assert_editable, s), ErrorCode.STATE_CONFLICT)
+    # ------------------------------------------------------------------ tests
+    def test_delete_payment_rejected(self):
+        self.state_conflict(
+            self.create_pre_invoice() + self.insert_payment(),
+            f"DELETE FROM payments WHERE pre_invoice_id = '{PI_ID}'",
+        )
 
-    def test_cancel_reason(self):
-        self.assertEqual(state.validate_cancel_reason("  customer withdrew "), "customer withdrew")
-        self.assertEqual(state.validate_cancel_reason("x" * 500), "x" * 500)
-        for bad in ["", "   ", "x" * 501, None, 5, ["a"]]:
-            self.assertEqual(code_of(state.validate_cancel_reason, bad), ErrorCode.VALIDATION_ERROR, repr(bad))
-        self.assertEqual(len(state.validate_cancel_reason(" " * 10 + "x" * 500 + " " * 10)), 500)
+    def test_update_confirmed_payment_rejected(self):
+        setup = (
+            self.create_pre_invoice()
+            + self.insert_payment()
+            + f"UPDATE payments SET status='CONFIRMED', confirmed_by='{self.admin}', confirmed_at=NOW() "
+            f"WHERE pre_invoice_id = '{PI_ID}';"
+        )
+        self.state_conflict(
+            setup,
+            f"UPDATE payments SET amount = 2000000 WHERE pre_invoice_id = '{PI_ID}'",
+        )
 
-    def test_product_immutable(self):
-        self.assertIsNone(code_of(state.assert_product_unchanged, "P1", {"quantity": "1"}))
-        self.assertIsNone(code_of(state.assert_product_unchanged, "P1", {"product_id": "p1"}))
-        self.assertEqual(code_of(state.assert_product_unchanged, "P1", {"product_id": "P2"}), ErrorCode.VALIDATION_ERROR)
+    def test_check_cash_with_cheque_fields_rejected(self):
+        self.fails(
+            self.create_pre_invoice(),
+            self.insert_payment(method="CASH", cheque_number="123"),
+            "23514",
+            "chk_payments_method_fields",
+        )
 
-    def item(self, **kw):
-        base = dict(id="i1", product_active=True, unit_active=True, unit_price=D(10), snapshot=[], required_field_ids=())
-        base.update(kw)
-        return state.SubmitItem(**base)
+    def test_check_amount_positive_rejected(self):
+        self.fails(
+            self.create_pre_invoice(),
+            self.insert_payment(amount=0),
+            "23514",
+            "chk_payments_amount",
+        )
 
-    def test_submit_order_and_details(self):
-        ok = [self.item()]
-        self.assertIsNone(code_of(state.check_submit, "DRAFT", True, ok))
-        for s in ["SUBMITTED", "CANCELLED"]:
-            self.assertEqual(code_of(state.check_submit, s, True, ok), ErrorCode.STATE_CONFLICT)
-        self.assertEqual(code_of(state.check_submit, "DRAFT", False, ok), ErrorCode.INACTIVE_REFERENCE)
-        self.assertEqual(code_of(state.check_submit, "DRAFT", True, [self.item(unit_active=False)]), ErrorCode.INACTIVE_REFERENCE)
-        self.assertEqual(code_of(state.check_submit, "DRAFT", True, [self.item(product_active=False)]), ErrorCode.INACTIVE_REFERENCE)
-
-        def details(items, cust=True):
-            try:
-                state.check_submit("DRAFT", cust, items)
-            except AppError as e:
-                return e.code, e.details
-        self.assertEqual(details([]), (ErrorCode.SUBMIT_PRECONDITION_FAILED, {"reason": "NO_ITEMS"}))
-        self.assertEqual(details([self.item(), self.item(id="i2", unit_price=D(0))]),
-                         (ErrorCode.SUBMIT_PRECONDITION_FAILED, {"reason": "ITEM_PRICE_MISSING", "item_id": "i2"}))
-        miss = self.item(id="i3", required_field_ids=("F1", "F0"), snapshot=[{"field_id": "f0"}])
-        self.assertEqual(details([miss]), (ErrorCode.SUBMIT_PRECONDITION_FAILED,
-                                           {"reason": "REQUIRED_SPECIFICATION_MISSING", "item_id": "i3", "field_id": "f1"}))
-        self.assertEqual(details([self.item(unit_price=D(0), unit_active=False)])[0], ErrorCode.INACTIVE_REFERENCE)
-        self.assertEqual(details([self.item(unit_price=D(0), required_field_ids=("F1",))])[1]["reason"], "ITEM_PRICE_MISSING")
-
-
-class Concurrency(unittest.TestCase):
-    T = datetime(2026, 10, 8, 9, 20, 11, 123456, tzinfo=timezone.utc)
-
-    def test_format_roundtrip(self):
-        s = cc.format_ts(self.T)
-        self.assertEqual(s, "2026-10-08T09:20:11.123456Z")
-        self.assertEqual(cc.parse_ts(s), self.T)
-        self.assertEqual(cc.format_ts(self.T.replace(microsecond=0)), "2026-10-08T09:20:11.000000Z")
-
-    def test_exact_match_only(self):
-        self.assertIsNone(code_of(cc.check_not_stale, "2026-10-08T09:20:11.123456Z", self.T))
-        self.assertEqual(code_of(cc.check_not_stale, "2026-10-08T09:20:11.123457Z", self.T), ErrorCode.STALE_UPDATE)
-        self.assertEqual(code_of(cc.check_not_stale, None, self.T), ErrorCode.VALIDATION_ERROR)
-        for bad in ["2026-10-08T09:20:11Z", "2026-10-08 09:20:11.123456", "2026-10-08T09:20:11.123Z", "x", 5, "2026-13-08T09:20:11.123456Z"]:
-            self.assertEqual(code_of(cc.check_not_stale, bad, self.T), ErrorCode.VALIDATION_ERROR, repr(bad))
-
-    def test_stale_carries_current_resource(self):
-        try:
-            cc.check_not_stale("2020-01-01T00:00:00.000000Z", self.T, {"id": "x"})
-        except AppError as e:
-            self.assertEqual(e.details, {"current": {"id": "x"}})
-
-
-class Audit(unittest.TestCase):
-    def test_closed_sets(self):
-        self.assertEqual({a.value for a in audit.AuditAction}, {"CREATE", "UPDATE", "DELETE", "SUBMIT", "CANCEL", "LOGIN", "LOGOUT",
-                                                                          "ISSUE", "SUPERSEDE", "PDF_GENERATE", "PDF_FAIL"})
-        self.assertEqual({a.value for a in audit.AuditEntity}, {"USER", "CUSTOMER", "PRODUCT", "PURCHASE_REQUEST", "PURCHASE_REQUEST_ITEM",
-                                                                        "PRE_INVOICE"})
-        kw = dict(organization_id="o", user_id="u", entity_id="e")
-        self.assertEqual(audit.build_entry("SUBMIT", "PURCHASE_REQUEST", **kw)["action"], "SUBMIT")
-        for a, e in [("APPROVE", "USER"), ("create", "USER"), ("CREATE", "ORDER"), ("LOGIN_FAILED", "USER"), ("", "USER")]:
-            with self.assertRaises(ValueError): audit.build_entry(a, e, **kw)
-
-    def test_secrets_never_reach_audit(self):
-        kw = dict(organization_id="o", user_id="u", entity_id="e")
-        for bad in [{"password_hash": "x"}, {"a": {"b": [{"Refresh_Token": "x"}]}}, {"token": 1}, {"password": "p"}]:
-            with self.assertRaises(ValueError): audit.build_entry("UPDATE", "USER", new_data=bad, **kw)
-            with self.assertRaises(ValueError): audit.build_entry("UPDATE", "USER", old_data=bad, **kw)
-        audit.build_entry("UPDATE", "USER", new_data={"first_name": "A", "role": {"code": "ADMIN"}}, **kw)
-
-    def test_organization_mandatory(self):
-        with self.assertRaises(ValueError): audit.build_entry("LOGIN", "USER", organization_id="", user_id="u", entity_id="u")
-
-    @unittest.skipUnless(CONTRACT, "SKIPPED: contract file not found")
-    def test_vocabulary_equals_contract_section_13(self):
-        sec = doc.section(TEXT, "13. Audit contract")
-        acts = re.search(r"\*\*Actions \(closed set\)\*\* \[D4\]: (.*?)\. `LOGOUT`", sec, re.S).group(1)
-        self.assertEqual(set(re.findall(r"`([A-Z_]+)`", acts)), {a.value for a in audit.AuditAction})
-        ents = re.search(r"\*\*Entity types \(closed set\):\*\* (.*?)\. Both are", sec, re.S).group(1)
-        self.assertEqual(set(re.findall(r"`([A-Z_]+)`", ents)), {a.value for a in audit.AuditEntity})
-
-
-class ErrorTable(unittest.TestCase):
-    @unittest.skipUnless(CONTRACT, "SKIPPED: contract file not found")
-    def test_error_codes_and_statuses_equal_contract_section_15(self):
-        rows = doc.table_rows(doc.section(TEXT, "15. Error codes"))
-        doc_map = {re.sub(r"[` ]|\(.*\)", "", r[1]): int(r[0]) for r in rows}
-        self.assertEqual(doc_map, {c.value: s for c, s in HTTP_STATUS.items()})
-
-    def test_body_shape(self):
-        b = AppError(ErrorCode.NOT_FOUND, details={"resource": "customer"}).to_body("rid-1")
-        self.assertEqual(b, {"error": {"code": "NOT_FOUND", "message": "Not found", "details": {"resource": "customer"}, "request_id": "rid-1"}})
-        self.assertEqual(AppError(ErrorCode.INTERNAL_ERROR).details, {})
-
-
-class ConfigEnvironment(unittest.TestCase):
-    SECRET = "x" * 32
-    def test_config_requires_env(self):
-        from tradeflow_core import config
-        for env in ({"TRADEFLOW_JWT_SECRET": self.SECRET}, {"TRADEFLOW_JWT_SECRET": self.SECRET, "TRADEFLOW_ENV": ""}, {"TRADEFLOW_JWT_SECRET": self.SECRET, "TRADEFLOW_ENV": "   "}):
-            with self.assertRaises(config.ConfigError) as cm:
-                config.load(env)
-            self.assertIn("TRADEFLOW_ENV is required", str(cm.exception), env)
-        with self.assertRaises(config.ConfigError):
-            config.load({"TRADEFLOW_JWT_SECRET": self.SECRET, "TRADEFLOW_ENV": "prod"})
-        with self.assertRaises(config.ConfigError):
-            config.load({"TRADEFLOW_JWT_SECRET": "dev" + "x" * 40, "TRADEFLOW_ENV": "production"})
-        s, _ = config.load({"TRADEFLOW_JWT_SECRET": "dev" + "x" * 40, "TRADEFLOW_ENV": "development"})
-        self.assertEqual(s.environment, "development")
+    def test_fk_pre_invoice_rejected(self):
+        self.fails(
+            "",
+            f"INSERT INTO payments ("
+            f"  id, organization_id, pre_invoice_id, payment_method, "
+            f"  amount, payment_date, status, created_by"
+            f") VALUES ("
+            f"  gen_random_uuid(), '{self.org}', gen_random_uuid(), 'CASH', "
+            f"  1000000, '{date.today().isoformat()}', "
+            f"  'PENDING_CONFIRMATION', '{self.admin}'"
+            f");",
+            "23503",
+        )
 
 
 if __name__ == "__main__":

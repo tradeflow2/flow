@@ -39,7 +39,7 @@ class PaymentService:
     # ------------------------------------------------------------------ helpers
     def _load_pre_invoice(self, conn, p, pre_invoice_id: str):
         row = conn.execute(
-            "SELECT id, organization_id, status, grand_total "
+            "SELECT id, organization_id, status, grand_total, pre_invoice_number "
             "  FROM pre_invoices "
             " WHERE id = %s AND organization_id = %s",
             (pre_invoice_id, p.org_id),

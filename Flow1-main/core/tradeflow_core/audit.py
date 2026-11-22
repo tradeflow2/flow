@@ -27,6 +27,7 @@ class AuditEntity(str, Enum):
     PURCHASE_REQUEST = "PURCHASE_REQUEST"
     PURCHASE_REQUEST_ITEM = "PURCHASE_REQUEST_ITEM"
     PRE_INVOICE = "PRE_INVOICE"
+    PAYMENT = "PAYMENT"
 
 
 FORBIDDEN_KEYS = frozenset({"password", "password_hash", "token", "token_hash", "access_token", "refresh_token",
