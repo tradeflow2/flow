@@ -36,6 +36,19 @@ _METHOD_FIELDS = {
     },
 }
 
+# PAYMENT Audit payload is intentionally narrower than the API serializer.
+# Keep this closed allowlist aligned with ADR-065 and STAGE_06_CONTRACT.
+PAYMENT_AUDIT_FIELDS = (
+    "id", "pre_invoice_id", "pre_invoice_number", "payment_method",
+    "amount", "payment_date", "status", "cheque_status", "cheque_due_date",
+)
+
+
+def build_create_audit_payload(payment_data: dict) -> dict:
+    """Return the exact allowlisted payload for a PAYMENT CREATE audit event."""
+    return {field: payment_data[field] for field in PAYMENT_AUDIT_FIELDS}
+
+
 PAYMENT_FIELDS = (
     "pre_invoice_id",
     "payment_method",

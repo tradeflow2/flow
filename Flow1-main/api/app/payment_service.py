@@ -132,7 +132,7 @@ class PaymentService:
             out = self._detail(conn, p, new_id)
             write_audit(
                 conn, p, "CREATE", "PAYMENT", new_id,
-                new={**out, "pre_invoice_number": pre["pre_invoice_number"]},
+                new=pay.build_create_audit_payload(out),
                 ip=ip,
             )
             return out
